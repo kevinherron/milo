@@ -12,6 +12,7 @@ package org.eclipse.milo.opcua.sdk.server.methods;
 
 import static java.util.Objects.requireNonNullElse;
 
+import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
@@ -23,6 +24,7 @@ import org.eclipse.milo.opcua.sdk.server.Session;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.encoding.EncodingContext;
 import org.eclipse.milo.opcua.stack.core.types.UaStructuredType;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DiagnosticInfo;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ExtensionObject;
@@ -90,23 +92,69 @@ public abstract class AbstractMethodInvocationHandler implements MethodInvocatio
             DataTypeTree dataTypeTree = node.getNodeContext().getServer().getDataTypeTree();
 
             if (dataTypeTree.isStructType(argDataTypeId)) {
-              ExtensionObject xo = (ExtensionObject) value;
-              UaStructuredType decoded =
-                  xo.decode(node.getNodeContext().getServer().getStaticEncodingContext());
+              EncodingContext encodingContext =
+                  node.getNodeContext().getServer().getStaticEncodingContext();
 
-              valueDataTypeId =
-                  decoded
-                      .getTypeId()
-                      .toNodeId(node.getNodeContext().getNamespaceTable())
-                      .orElse(NodeId.NULL_VALUE);
+              // A struct-typed argument arrives on the wire as a scalar ExtensionObject or, for an
+              // array-valued argument (e.g. a method taking a Structure[]), an ExtensionObject[].
+              // Decode a representative element to determine the concrete structure type; the
+              // value-rank check below independently enforces the scalar-vs-array shape.
+              ExtensionObject representative = null;
+              if (value instanceof ExtensionObject xo) {
+                representative = xo;
+              } else if (value instanceof ExtensionObject[] array) {
+                for (ExtensionObject element : array) {
+                  if (element != null && !element.isNull()) {
+                    representative = element;
+                    break;
+                  }
+                }
+              }
 
-              DataType argType = dataTypeTree.getType(argDataTypeId);
-              boolean isAbstract = argType != null && argType.isAbstract();
+              if (representative != null) {
+                UaStructuredType decoded = representative.decode(encodingContext);
 
-              if (isAbstract) {
-                dataTypeMatch = dataTypeTree.isSubtypeOf(valueDataTypeId, argDataTypeId);
+                valueDataTypeId =
+                    decoded
+                        .getTypeId()
+                        .toNodeId(node.getNodeContext().getNamespaceTable())
+                        .orElse(NodeId.NULL_VALUE);
+
+                DataType argType = dataTypeTree.getType(argDataTypeId);
+                boolean isAbstract = argType != null && argType.isAbstract();
+
+                if (isAbstract) {
+                  dataTypeMatch = dataTypeTree.isSubtypeOf(valueDataTypeId, argDataTypeId);
+                } else {
+                  dataTypeMatch = Objects.equals(valueDataTypeId, argDataTypeId);
+                }
+
+                if (dataTypeMatch) {
+                  // The generated method body casts the argument value to its concrete structure
+                  // type, so replace the wire ExtensionObject(s) with the decoded structure(s). A
+                  // scalar becomes the decoded value; an array becomes a concrete-typed array (the
+                  // representative fixes the component type) so the invoke's cast to
+                  // ConcreteType[] succeeds.
+                  if (value instanceof ExtensionObject) {
+                    inputArgumentValues[i] = new Variant(decoded);
+                  } else {
+                    ExtensionObject[] encoded = (ExtensionObject[]) value;
+                    Object decodedArray = Array.newInstance(decoded.getClass(), encoded.length);
+                    for (int j = 0; j < encoded.length; j++) {
+                      ExtensionObject element = encoded[j];
+                      if (element != null && !element.isNull()) {
+                        Array.set(decodedArray, j, element.decode(encodingContext));
+                      }
+                    }
+                    inputArgumentValues[i] = new Variant(decodedArray);
+                  }
+                }
               } else {
-                dataTypeMatch = Objects.equals(valueDataTypeId, argDataTypeId);
+                // An empty or all-null struct array carries no concrete type to refine (left to
+                // the value-rank check); any non-ExtensionObject value is a mismatch for a
+                // struct-typed argument.
+                dataTypeMatch =
+                    value instanceof ExtensionObject || value instanceof ExtensionObject[];
               }
             } else {
               dataTypeMatch = dataTypeTree.isAssignable(argDataTypeId, value.getClass());
