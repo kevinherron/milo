@@ -22,9 +22,12 @@ import org.eclipse.milo.opcua.sdk.server.AccessContext;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
 import org.eclipse.milo.opcua.sdk.server.Session;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
+import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.encoding.DataTypeCodec;
 import org.eclipse.milo.opcua.stack.core.encoding.EncodingContext;
+import org.eclipse.milo.opcua.stack.core.types.DataTypeManager;
 import org.eclipse.milo.opcua.stack.core.types.UaStructuredType;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DiagnosticInfo;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ExtensionObject;
@@ -88,77 +91,111 @@ public abstract class AbstractMethodInvocationHandler implements MethodInvocatio
                   .flatMap(xni -> xni.toNodeId(node.getNodeContext().getNamespaceTable()))
                   .orElse(NodeId.NULL_VALUE);
 
-          if (!argDataTypeId.equals(valueDataTypeId)) {
-            DataTypeTree dataTypeTree = node.getNodeContext().getServer().getDataTypeTree();
+          DataTypeTree dataTypeTree = node.getNodeContext().getServer().getDataTypeTree();
 
-            if (dataTypeTree.isStructType(argDataTypeId)) {
-              EncodingContext encodingContext =
-                  node.getNodeContext().getServer().getStaticEncodingContext();
+          // Whether the argument's DataType is a structure. isStructType() alone misses the
+          // abstract Structure root because a type is not its own subtype, so test for it
+          // explicitly. This also matters because the Structure DataType's NodeId (i=22) collides
+          // with the builtin ExtensionObject id that a raw wire value reports for its own
+          // DataType, which defeats the plain argDataTypeId-vs-valueDataTypeId comparison.
+          boolean argIsStruct =
+              NodeIds.Structure.equals(argDataTypeId) || dataTypeTree.isStructType(argDataTypeId);
 
-              // A struct-typed argument arrives on the wire as a scalar ExtensionObject or, for an
-              // array-valued argument (e.g. a method taking a Structure[]), an ExtensionObject[].
-              // Decode a representative element to determine the concrete structure type; the
-              // value-rank check below independently enforces the scalar-vs-array shape.
-              ExtensionObject representative = null;
-              if (value instanceof ExtensionObject xo) {
-                representative = xo;
-              } else if (value instanceof ExtensionObject[] array) {
-                for (ExtensionObject element : array) {
-                  if (element != null && !element.isNull()) {
-                    representative = element;
-                    break;
-                  }
-                }
-              }
+          if (argIsStruct
+              && (value instanceof ExtensionObject || value instanceof ExtensionObject[])) {
+            EncodingContext encodingContext =
+                node.getNodeContext().getServer().getStaticEncodingContext();
 
-              if (representative != null) {
-                UaStructuredType decoded = representative.decode(encodingContext);
+            DataType argType = dataTypeTree.getType(argDataTypeId);
+            boolean isAbstract = argType != null && argType.isAbstract();
 
+            // A struct-typed argument arrives on the wire as a scalar ExtensionObject or, for an
+            // array-valued argument (e.g. a method taking a Structure[]), an ExtensionObject[].
+            // The generated method skeleton casts the value to its concrete Java type, so decode
+            // the wire ExtensionObject(s) and replace the value with the decoded structure(s). This
+            // must run even when argDataTypeId equals valueDataTypeId: an abstract Structure
+            // argument shares the ExtensionObject NodeId that raw wire values report, so the ids
+            // coincide yet the value still needs decoding. The value-rank check below independently
+            // enforces the scalar-vs-array shape.
+            if (value instanceof ExtensionObject xo) {
+              UaStructuredType decoded = xo.decode(encodingContext);
+
+              if (decoded == null) {
+                // A null-bodied scalar ExtensionObject carries no concrete structure for a
+                // struct-typed argument; treat it as a type mismatch rather than dereferencing.
+                dataTypeMatch = false;
+              } else {
                 valueDataTypeId =
                     decoded
                         .getTypeId()
                         .toNodeId(node.getNodeContext().getNamespaceTable())
                         .orElse(NodeId.NULL_VALUE);
 
-                DataType argType = dataTypeTree.getType(argDataTypeId);
-                boolean isAbstract = argType != null && argType.isAbstract();
-
-                if (isAbstract) {
-                  dataTypeMatch = dataTypeTree.isSubtypeOf(valueDataTypeId, argDataTypeId);
-                } else {
-                  dataTypeMatch = Objects.equals(valueDataTypeId, argDataTypeId);
-                }
+                dataTypeMatch =
+                    isAbstract
+                        ? dataTypeTree.isSubtypeOf(valueDataTypeId, argDataTypeId)
+                        : Objects.equals(valueDataTypeId, argDataTypeId);
 
                 if (dataTypeMatch) {
-                  // The generated method body casts the argument value to its concrete structure
-                  // type, so replace the wire ExtensionObject(s) with the decoded structure(s). A
-                  // scalar becomes the decoded value; an array becomes a concrete-typed array (the
-                  // representative fixes the component type) so the invoke's cast to
-                  // ConcreteType[] succeeds.
-                  if (value instanceof ExtensionObject) {
-                    inputArgumentValues[i] = new Variant(decoded);
-                  } else {
-                    ExtensionObject[] encoded = (ExtensionObject[]) value;
-                    Object decodedArray = Array.newInstance(decoded.getClass(), encoded.length);
-                    for (int j = 0; j < encoded.length; j++) {
-                      ExtensionObject element = encoded[j];
-                      if (element != null && !element.isNull()) {
-                        Array.set(decodedArray, j, element.decode(encodingContext));
-                      }
-                    }
-                    inputArgumentValues[i] = new Variant(decodedArray);
+                  inputArgumentValues[i] = new Variant(decoded);
+                }
+              }
+            } else if (value instanceof ExtensionObject[] array) {
+              // Decode and type-check EVERY element rather than only a representative: a
+              // heterogeneous array — mixed concrete subtypes under an abstract argument, or a
+              // stray mismatched element under a concrete argument — must be validated
+              // element-by-element, or a bad element would slip past validation and later fail
+              // the skeleton's array store as an unhandled ArrayStoreException.
+              UaStructuredType[] decodedElements = new UaStructuredType[array.length];
+              boolean allElementsMatch = true;
+
+              for (int j = 0; j < array.length && allElementsMatch; j++) {
+                ExtensionObject element = array[j];
+                if (element == null || element.isNull()) {
+                  // A null element carries no concrete type; it decodes to a null slot.
+                  continue;
+                }
+
+                UaStructuredType decoded = element.decode(encodingContext);
+                decodedElements[j] = decoded;
+
+                NodeId elementDataTypeId =
+                    decoded
+                        .getTypeId()
+                        .toNodeId(node.getNodeContext().getNamespaceTable())
+                        .orElse(NodeId.NULL_VALUE);
+
+                allElementsMatch =
+                    isAbstract
+                        ? dataTypeTree.isSubtypeOf(elementDataTypeId, argDataTypeId)
+                        : Objects.equals(elementDataTypeId, argDataTypeId);
+              }
+
+              dataTypeMatch = allElementsMatch;
+
+              if (dataTypeMatch) {
+                // Allocate the decoded array with the argument's concrete Java component type so
+                // the skeleton's cast to ConcreteType[] succeeds — including for an empty or
+                // all-null array, which carries no element to infer the type from.
+                Class<?> componentType =
+                    structArrayComponentType(
+                        encodingContext.getDataTypeManager(), argDataTypeId, decodedElements);
+
+                Object decodedArray = Array.newInstance(componentType, array.length);
+                for (int j = 0; j < array.length; j++) {
+                  if (decodedElements[j] != null) {
+                    Array.set(decodedArray, j, decodedElements[j]);
                   }
                 }
-              } else {
-                // An empty or all-null struct array carries no concrete type to refine (left to
-                // the value-rank check); any non-ExtensionObject value is a mismatch for a
-                // struct-typed argument.
-                dataTypeMatch =
-                    value instanceof ExtensionObject || value instanceof ExtensionObject[];
+                inputArgumentValues[i] = new Variant(decodedArray);
               }
-            } else {
-              dataTypeMatch = dataTypeTree.isAssignable(argDataTypeId, value.getClass());
             }
+          } else if (!argDataTypeId.equals(valueDataTypeId)) {
+            // Either a non-struct argument (checked against its backing class) or a struct-typed
+            // argument given a value that is neither an ExtensionObject nor an ExtensionObject[],
+            // which cannot be the expected structure.
+            dataTypeMatch =
+                !argIsStruct && dataTypeTree.isAssignable(argDataTypeId, value.getClass());
           }
         }
 
@@ -236,6 +273,59 @@ public abstract class AbstractMethodInvocationHandler implements MethodInvocatio
       return new CallMethodResult(
           e.getStatusCode(), new StatusCode[0], new DiagnosticInfo[0], new Variant[0]);
     }
+  }
+
+  /**
+   * Determine the Java component type to use for a decoded structure array so the generated method
+   * skeleton's cast to its concrete argument type (e.g. {@code (FooDataType[])}) succeeds.
+   *
+   * <p>A concrete structure DataType has a registered {@link DataTypeCodec} whose {@link
+   * DataTypeCodec#getType() type} names the class exactly; this also covers empty or all-null
+   * arrays, which carry no element to infer the type from. An abstract structure DataType has no
+   * codec, so fall back to the nearest common superclass of the decoded elements — for the OPC UA
+   * single-inheritance structure hierarchy this resolves to the abstract type's own Java class,
+   * which the skeleton casts to — or to {@link UaStructuredType} when there are no elements.
+   *
+   * @param dataTypeManager the {@link DataTypeManager} to resolve the argument's codec from.
+   * @param argDataTypeId the {@link NodeId} of the argument's structure DataType.
+   * @param decodedElements the decoded array elements (may contain nulls for null wire elements).
+   * @return the component type to allocate the decoded array with.
+   */
+  private static Class<?> structArrayComponentType(
+      DataTypeManager dataTypeManager, NodeId argDataTypeId, UaStructuredType[] decodedElements) {
+    DataTypeCodec codec = dataTypeManager.getCodec(argDataTypeId);
+    if (codec != null) {
+      return codec.getType();
+    }
+
+    Class<?> componentType = null;
+    for (UaStructuredType element : decodedElements) {
+      if (element == null) {
+        continue;
+      }
+      componentType =
+          componentType == null
+              ? element.getClass()
+              : nearestCommonSuperclass(componentType, element.getClass());
+    }
+
+    return componentType != null ? componentType : UaStructuredType.class;
+  }
+
+  /**
+   * Find the nearest common superclass of {@code a} and {@code b} by walking {@code a}'s superclass
+   * chain until it is assignable from {@code b}.
+   *
+   * @param a a class.
+   * @param b a class.
+   * @return the nearest common superclass, or {@link Object} if none is found.
+   */
+  private static Class<?> nearestCommonSuperclass(Class<?> a, Class<?> b) {
+    Class<?> candidate = a;
+    while (candidate != null && !candidate.isAssignableFrom(b)) {
+      candidate = candidate.getSuperclass();
+    }
+    return candidate != null ? candidate : Object.class;
   }
 
   /**

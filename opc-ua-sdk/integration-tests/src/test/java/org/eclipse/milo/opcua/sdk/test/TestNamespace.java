@@ -44,6 +44,7 @@ import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.DataTypeEncoding;
+import org.eclipse.milo.opcua.stack.core.types.UaStructuredType;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
@@ -397,6 +398,46 @@ public class TestNamespace extends ManagedNamespaceWithLifecycle {
 
                     UaMethodNode methodNode = b.buildAndAdd();
                     methodNode.setInvocationHandler(new ScalarAbstractStructureMethod(methodNode));
+
+                    return methodNode;
+                  });
+
+              UaMethodNode.build(
+                  getNodeContext(),
+                  b -> {
+                    b.setNodeId(newNodeId("arrayStructureEcho()"));
+                    b.setBrowseName(newQualifiedName("arrayStructureEcho()"));
+                    b.setDisplayName(LocalizedText.english("arrayStructureEcho()"));
+
+                    b.addReference(
+                        new Reference(
+                            b.getNodeId(),
+                            NodeIds.HasOrderedComponent,
+                            NodeIds.ObjectsFolder.expanded(),
+                            Reference.Direction.INVERSE));
+
+                    UaMethodNode methodNode = b.buildAndAdd();
+                    methodNode.setInvocationHandler(new ArrayStructureMethod(methodNode));
+
+                    return methodNode;
+                  });
+
+              UaMethodNode.build(
+                  getNodeContext(),
+                  b -> {
+                    b.setNodeId(newNodeId("arrayAbstractStructureEcho()"));
+                    b.setBrowseName(newQualifiedName("arrayAbstractStructureEcho()"));
+                    b.setDisplayName(LocalizedText.english("arrayAbstractStructureEcho()"));
+
+                    b.addReference(
+                        new Reference(
+                            b.getNodeId(),
+                            NodeIds.HasOrderedComponent,
+                            NodeIds.ObjectsFolder.expanded(),
+                            Reference.Direction.INVERSE));
+
+                    UaMethodNode methodNode = b.buildAndAdd();
+                    methodNode.setInvocationHandler(new ArrayAbstractStructureMethod(methodNode));
 
                     return methodNode;
                   });
@@ -758,6 +799,55 @@ public class TestNamespace extends ManagedNamespaceWithLifecycle {
     protected Argument getInputArgument() {
       return new Argument(
           "Input", NodeIds.Structure, ValueRanks.Scalar, null, LocalizedText.NULL_VALUE);
+    }
+  }
+
+  /**
+   * A method taking a concrete structure array argument ({@code XVType[]}). Its {@link #invoke}
+   * casts to the concrete Java array type exactly like a generated method skeleton does, so an
+   * undecoded {@code ExtensionObject[]} slipping through validation would fail the cast.
+   */
+  static class ArrayStructureMethod extends AbstractEchoMethod {
+
+    public ArrayStructureMethod(UaMethodNode node) {
+      super(node);
+    }
+
+    @Override
+    protected Argument getInputArgument() {
+      return new Argument(
+          "Input", NodeIds.XVType, ValueRanks.OneDimension, null, LocalizedText.NULL_VALUE);
+    }
+
+    @Override
+    protected Variant[] invoke(InvocationContext invocationContext, Variant[] inputValues) {
+      // Mirror the generated method skeleton's cast to the concrete Java array type.
+      XVType[] echoed = (XVType[]) inputValues[0].getValue();
+      return new Variant[] {new Variant(echoed)};
+    }
+  }
+
+  /**
+   * A method taking an abstract structure array argument ({@code Structure[]}). Its {@link #invoke}
+   * casts to {@link UaStructuredType}{@code []}, so the decoded array's component type must be a
+   * common supertype of the (possibly heterogeneous) elements.
+   */
+  static class ArrayAbstractStructureMethod extends AbstractEchoMethod {
+
+    public ArrayAbstractStructureMethod(UaMethodNode node) {
+      super(node);
+    }
+
+    @Override
+    protected Argument getInputArgument() {
+      return new Argument(
+          "Input", NodeIds.Structure, ValueRanks.OneDimension, null, LocalizedText.NULL_VALUE);
+    }
+
+    @Override
+    protected Variant[] invoke(InvocationContext invocationContext, Variant[] inputValues) {
+      UaStructuredType[] echoed = (UaStructuredType[]) inputValues[0].getValue();
+      return new Variant[] {new Variant(echoed)};
     }
   }
 

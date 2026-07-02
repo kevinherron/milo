@@ -216,4 +216,113 @@ public class AbstractMethodInvocationHandlerTest extends AbstractClientServerTes
     assertEquals(
         StatusCode.of(Bad_TypeMismatch), requireNonNull(result.getInputArgumentResults())[0]);
   }
+
+  @Test
+  void arrayStructureEcho() throws UaException {
+    var xo1 = ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new XVType(1.0, 2.0f));
+    var xo2 = ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new XVType(3.0, 4.0f));
+    var input = new Variant(new ExtensionObject[] {xo1, xo2});
+
+    CallResponse response =
+        client.call(
+            List.of(
+                new CallMethodRequest(
+                    NodeIds.ObjectsFolder,
+                    NodeId.parse("ns=2;s=arrayStructureEcho()"),
+                    new Variant[] {input})));
+
+    CallMethodResult result = requireNonNull(response.getResults())[0];
+
+    assertEquals(StatusCode.GOOD, result.getStatusCode());
+    assertEquals(0, requireNonNull(result.getInputArgumentResults()).length);
+    assertEquals(input, requireNonNull(result.getOutputArguments())[0]);
+  }
+
+  @Test
+  void emptyArrayStructureEcho() throws UaException {
+    // An empty struct array carries no element to infer the concrete type from; validation must
+    // still decode it to a concrete-typed empty array so the skeleton's cast to XVType[] succeeds
+    // and the call returns GOOD rather than Bad_InternalError.
+    var input = new Variant(new ExtensionObject[0]);
+
+    CallResponse response =
+        client.call(
+            List.of(
+                new CallMethodRequest(
+                    NodeIds.ObjectsFolder,
+                    NodeId.parse("ns=2;s=arrayStructureEcho()"),
+                    new Variant[] {input})));
+
+    CallMethodResult result = requireNonNull(response.getResults())[0];
+
+    assertEquals(StatusCode.GOOD, result.getStatusCode());
+    assertEquals(0, requireNonNull(result.getInputArgumentResults()).length);
+  }
+
+  @Test
+  void arrayStructureEchoRejectsMismatchedElement() throws UaException {
+    // A concrete XVType[] argument carrying a stray element of a different structure type must be
+    // rejected cleanly as Bad_TypeMismatch (every element is type-checked), not slip past
+    // validation and later throw ArrayStoreException -> Bad_InternalError.
+    var xo1 = ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new XVType(1.0, 2.0f));
+    var xo2 =
+        ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new ThreeDVector(1.0, 2.0, 3.0));
+    var input = new Variant(new ExtensionObject[] {xo1, xo2});
+
+    CallResponse response =
+        client.call(
+            List.of(
+                new CallMethodRequest(
+                    NodeIds.ObjectsFolder,
+                    NodeId.parse("ns=2;s=arrayStructureEcho()"),
+                    new Variant[] {input})));
+
+    CallMethodResult result = requireNonNull(response.getResults())[0];
+
+    assertEquals(StatusCode.of(Bad_InvalidArgument), result.getStatusCode());
+    assertEquals(
+        StatusCode.of(Bad_TypeMismatch), requireNonNull(result.getInputArgumentResults())[0]);
+  }
+
+  @Test
+  void heterogeneousAbstractArrayStructureEcho() throws UaException {
+    // An abstract Structure[] argument may legitimately carry differing concrete subtypes; the
+    // decoded array's component type must be a common supertype so mixed subtypes store
+    // covariantly and the skeleton's cast to UaStructuredType[] succeeds.
+    var xo1 = ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new XVType(1.0, 2.0f));
+    var xo2 =
+        ExtensionObject.encode(DefaultEncodingContext.INSTANCE, new ThreeDVector(1.0, 2.0, 3.0));
+    var input = new Variant(new ExtensionObject[] {xo1, xo2});
+
+    CallResponse response =
+        client.call(
+            List.of(
+                new CallMethodRequest(
+                    NodeIds.ObjectsFolder,
+                    NodeId.parse("ns=2;s=arrayAbstractStructureEcho()"),
+                    new Variant[] {input})));
+
+    CallMethodResult result = requireNonNull(response.getResults())[0];
+
+    assertEquals(StatusCode.GOOD, result.getStatusCode());
+    assertEquals(0, requireNonNull(result.getInputArgumentResults()).length);
+  }
+
+  @Test
+  void emptyAbstractArrayStructureEcho() throws UaException {
+    var input = new Variant(new ExtensionObject[0]);
+
+    CallResponse response =
+        client.call(
+            List.of(
+                new CallMethodRequest(
+                    NodeIds.ObjectsFolder,
+                    NodeId.parse("ns=2;s=arrayAbstractStructureEcho()"),
+                    new Variant[] {input})));
+
+    CallMethodResult result = requireNonNull(response.getResults())[0];
+
+    assertEquals(StatusCode.GOOD, result.getStatusCode());
+    assertEquals(0, requireNonNull(result.getInputArgumentResults()).length);
+  }
 }
