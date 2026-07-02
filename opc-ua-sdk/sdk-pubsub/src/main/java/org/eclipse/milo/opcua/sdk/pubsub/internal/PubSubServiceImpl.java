@@ -927,6 +927,12 @@ public final class PubSubServiceImpl implements PubSubService {
     return diagnostics;
   }
 
+  @Override
+  public void invalidateSecurityKeys(SecurityGroupRef securityGroup) {
+    requireNonNull(securityGroup, "securityGroup");
+    securityKeyManager.invalidate(securityGroup);
+  }
+
   // endregion
 
   // region engine internals

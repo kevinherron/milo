@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.UnaryOperator;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublishedDataSetRef;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupRef;
 import org.eclipse.milo.opcua.sdk.pubsub.internal.PubSubServiceImpl;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 
@@ -265,6 +266,26 @@ public interface PubSubService extends AutoCloseable {
    * @return the {@link PubSubDiagnostics} for this service.
    */
   PubSubDiagnostics diagnostics();
+
+  /**
+   * Invalidate the currently held PubSub security keys for {@code securityGroup} and re-fetch them
+   * from the bound key provider (Part 14 §6.2.12.2: modifying a SecurityGroup's {@code
+   * SecurityPolicyUri} or {@code KeyLifetime} invalidates all of its existing keys).
+   *
+   * <p>The held key window is dropped immediately, so publishers secured by the group stop sending
+   * and subscribers stop resolving until fresh keys arrive under the new parameters ("breaks
+   * communication until everyone re-fetches"). The re-fetch is single-flight and runs on the
+   * service scheduler. This is intended to be called after a reconfiguration that changed the
+   * group's policy or key lifetime, in addition to the automatic re-registration a reconfigure
+   * performs, so that a SecurityGroup shared by more than one still-running group is guaranteed to
+   * drop its stale keys.
+   *
+   * <p>No-op if {@code securityGroup} names no group with live key state (an unsecured or
+   * not-yet-started group).
+   *
+   * @param securityGroup the reference to the SecurityGroup whose keys are invalidated.
+   */
+  void invalidateSecurityKeys(SecurityGroupRef securityGroup);
 
   /** Shut down this service synchronously, waiting for {@link #shutdown()} to complete. */
   @Override

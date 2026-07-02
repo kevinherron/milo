@@ -491,6 +491,50 @@ final class SecurityKeyManager {
   }
 
   /**
+   * Invalidate all keys held for {@code ref} and re-fetch under the (possibly changed)
+   * SecurityGroup parameters (Part 14 §6.2.12.2: "If the SecurityPolicyUri or the KeyLifetime of an
+   * existing SecurityGroup are modified, all existing keys of the SecurityGroup are invalidated").
+   * Unlike the wire-triggered refreshes ({@link #subscriberKey} unknown token, {@link
+   * #forceKeyReset}) this is an authorized configuration action, so it is <b>not</b> rate-limited:
+   * it drops the current token window immediately — publishers stop sending ({@link
+   * #publishContext} returns null) and subscribers stop resolving until fresh keys arrive, per the
+   * §6.2.12.2 "breaks communication until everyone re-fetches" behavior — and schedules a fresh
+   * single-flight fetch on the scheduler. Registered consumers stay registered; the fetch
+   * completion re-completes/recovers them through the normal {@link #applyKeySet} path (a fetch
+   * returning key material under a policy that no longer matches a consumer's configured URI fails
+   * the K8 gate, so the group correctly refuses stale-policy keys until the provider serves the new
+   * policy). No-op if {@code ref} has no live key state (an unsecured group, or no consumer has
+   * registered for it).
+   *
+   * <p>Called off the engine lock (never across I/O) after a successful reconfigure that changed
+   * the group's policy or lifetime. The group's own reconfigure restart already re-registers it
+   * under the new configuration and disposes the old key state when it was the group's last
+   * consumer; this explicit invalidation additionally guarantees the drop when the SecurityGroup is
+   * shared by another still-registered group, whose surviving registration would otherwise keep the
+   * stale (old-policy, old-lifetime) window alive.
+   *
+   * @param ref the SecurityGroupRef whose keys are invalidated.
+   */
+  void invalidate(SecurityGroupRef ref) {
+    synchronized (lock) {
+      if (shutdown) {
+        return;
+      }
+      GroupKeyState state = states.get(ref);
+      if (state == null) {
+        return;
+      }
+      cancelRefresh(state);
+      state.window.values().forEach(tokenKey -> retire(tokenKey.material));
+      state.window.clear();
+      state.policy = null;
+      state.haveKeys = false;
+      state.staleFailed = false;
+    }
+    executeFetch(ref);
+  }
+
+  /**
    * Whether a wire-triggered refresh (unknown SecurityTokenId, force-key-reset bit) may fire now,
    * consuming the trigger slot when it may: both triggers are read from unauthenticated plaintext
    * SecurityHeader fields, so without a rate bound an off-path attacker spraying spoofed token ids

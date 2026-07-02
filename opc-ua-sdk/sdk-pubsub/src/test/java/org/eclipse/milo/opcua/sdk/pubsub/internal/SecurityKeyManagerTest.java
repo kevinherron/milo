@@ -895,4 +895,49 @@ class SecurityKeyManagerTest {
   }
 
   // endregion
+
+  // region invalidate (§6.2.12.2)
+
+  @Test
+  void invalidateDropsHeldKeysAndReFetches() throws Exception {
+    TestProvider testProvider = installProvider(keySet(1, 2));
+    registerAndAwaitKeys();
+    int initialFetches = testProvider.fetchCount.get();
+    assertEquals(uint(1), tokenOfPublishContext());
+
+    // park the re-fetch so the immediate key drop is observable before fresh keys land
+    var pending = new CompletableFuture<SecurityKeySet>();
+    testProvider.next.set(pending);
+
+    // invalidate is an authorized config action, NOT a wire trigger: it fires at nanoTime 0,
+    // inside the cooldown that unknownTokenRefreshIsRateLimited proves blocks wire-triggered
+    // fetches
+    manager.invalidate(REF);
+    awaitTrue("re-fetch triggered", () -> testProvider.fetchCount.get() == initialFetches + 1);
+
+    // §6.2.12.2: the existing keys are invalidated immediately — publishers stop sending and
+    // subscribers cannot resolve until the fresh keys arrive
+    assertNull(manager.publishContext(REF, MessageSecurityMode.Sign));
+    assertNull(manager.subscriberKey(REF, uint(1)).material());
+
+    // fresh keys (a new token stream, e.g. under a changed policy/lifetime) land and the group
+    // serves them again
+    pending.complete(keySet(9, 2));
+    awaitTrue("fresh keys applied", () -> manager.subscriberKey(REF, uint(9)).material() != null);
+    assertEquals(uint(9), tokenOfPublishContext());
+  }
+
+  @Test
+  void invalidateWithoutKeyStateIsANoOp() throws Exception {
+    TestProvider testProvider = installProvider(keySet(1, 2));
+
+    // no component ever registered for REF, so there is no live key state to invalidate
+    manager.invalidate(REF);
+
+    Thread.sleep(50);
+    assertEquals(0, testProvider.fetchCount.get(), "no state => no fetch");
+    assertNull(manager.publishContext(REF, MessageSecurityMode.Sign));
+  }
+
+  // endregion
 }
