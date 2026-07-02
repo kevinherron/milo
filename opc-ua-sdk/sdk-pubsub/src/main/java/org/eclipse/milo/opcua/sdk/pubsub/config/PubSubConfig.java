@@ -25,6 +25,7 @@ import org.eclipse.milo.opcua.stack.core.NamespaceTable;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.BrokerTransportQualityOfService;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType;
 import org.jspecify.annotations.Nullable;
@@ -489,6 +490,7 @@ public final class PubSubConfig {
             throw new PubSubConfigValidationException(
                 writerPath + ": JSON message settings are not allowed on a UDP connection");
           }
+          checkWriterQosOverride(writer.getBrokerTransport(), writerPath);
           if (!publishedDataSetNames.contains(writer.getDataSet().name())) {
             throw new PubSubConfigValidationException(
                 writerPath
@@ -528,6 +530,29 @@ public final class PubSubConfig {
                     + ": unresolved StandaloneSubscribedDataSetRef '%s'".formatted(ref.name()));
           }
         }
+      }
+    }
+
+    /**
+     * A DataSetWriter-level {@code RequestedDeliveryGuarantee} override (anything other than {@code
+     * NotSpecified}) is only valid alongside a writer-level {@code QueueName} override: a writer
+     * cannot demand a different broker delivery guarantee on the group's shared topic (Part 14
+     * §6.4.2.5.4). Writers without broker transport settings, or with the default {@code
+     * NotSpecified} guarantee, are unaffected.
+     */
+    private static void checkWriterQosOverride(
+        @Nullable BrokerTransportSettings brokerTransport, String writerPath) {
+
+      if (brokerTransport == null) {
+        return;
+      }
+      if (brokerTransport.getRequestedDeliveryGuarantee()
+              != BrokerTransportQualityOfService.NotSpecified
+          && brokerTransport.getQueueName() == null) {
+        throw new PubSubConfigValidationException(
+            writerPath
+                + ": a writer-level requestedDeliveryGuarantee override requires a writer-level"
+                + " queueName override (Part 14 §6.4.2.5.4)");
       }
     }
 
