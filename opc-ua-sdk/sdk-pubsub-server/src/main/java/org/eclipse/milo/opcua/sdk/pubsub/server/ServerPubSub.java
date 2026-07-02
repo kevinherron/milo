@@ -81,6 +81,13 @@ import org.slf4j.LoggerFactory;
  *       PubSubConfigurationStore#load()} returns a stored configuration, the stored configuration
  *       wins and the attach configuration is ignored; otherwise the attach configuration is used
  *       and saved once. Changes made later via {@link #runtime()} are not saved automatically.
+ *   <li>If {@link ServerPubSubOptions#isSksServerEnabled()}, the server acts as a minimal Part 14
+ *       Security Key Service: {@link #startup()} implements the well-known {@code GetSecurityKeys}
+ *       method ({@code i=15215}) for the SecurityGroups present in the effective attach-time
+ *       configuration, and {@link #shutdown()} restores it to {@code Bad_NotImplemented}.
+ *       SecurityGroups added by later {@link #runtime()} reconfiguration are not served (the same
+ *       attach-time posture as the automatic bindings and the information model). See {@link
+ *       ServerPubSubOptions.Builder#sksServerEnabled} and {@link PubSubMethodAuthorizer}.
  * </ul>
  *
  * <p>Attach timing: {@code attach} is legal any time after {@link OpcUaServer} construction — the
@@ -96,14 +103,29 @@ public final class ServerPubSub implements AutoCloseable {
   private final ConcurrentMap<String, AtomicLong> writeErrorCounters = new ConcurrentHashMap<>();
   private final AtomicBoolean fragmentStarted = new AtomicBoolean(false);
   private final AtomicBoolean fragmentStopped = new AtomicBoolean(false);
+  private final AtomicBoolean sksServerStarted = new AtomicBoolean(false);
+  private final AtomicBoolean sksServerStopped = new AtomicBoolean(false);
 
   private final PubSubService service;
   private final @Nullable PubSubInfoModelFragment fragment;
+  private final @Nullable SksServer sksServer;
 
   /** The automatic TargetVariables writers, keyed by reader path; deactivated at shutdown. */
   private final Map<String, TargetVariablesWriter> writers;
 
   private ServerPubSub(OpcUaServer server, PubSubConfig config, ServerPubSubOptions options) {
+    // construct the SKS face first: SecurityGroupKeyStore validates the SecurityGroup
+    // configuration (supported policy URIs, unique ids) and must fail attach before any
+    // runtime resources are created
+    this.sksServer =
+        options.isSksServerEnabled()
+            ? new SksServer(
+                server,
+                new SecurityGroupKeyStore(
+                    config.securityGroups(), server.getScheduledExecutorService()),
+                options.getMethodAuthorizer())
+            : null;
+
     var writers = new HashMap<String, TargetVariablesWriter>();
 
     PubSubBindings bindings = buildBindings(server, config, options, writers);
@@ -168,8 +190,9 @@ public final class ServerPubSub implements AutoCloseable {
    *     not supported in this version.
    * @throws PubSubConfigValidationException if a {@link NodeFieldAddress} in the effective
    *     configuration cannot be resolved against the server's {@link NamespaceTable}, a
-   *     TargetVariables index range cannot be parsed, or a stored configuration does not map to a
-   *     valid config.
+   *     TargetVariables index range cannot be parsed, a stored configuration does not map to a
+   *     valid config, or the SKS server face is enabled and a SecurityGroup carries an unsupported
+   *     SecurityPolicyUri or a duplicate SecurityGroupId.
    */
   public static ServerPubSub attach(
       OpcUaServer server, PubSubConfig config, ServerPubSubOptions options) {
@@ -236,6 +259,16 @@ public final class ServerPubSub implements AutoCloseable {
       }
     }
 
+    if (sksServer != null && sksServerStarted.compareAndSet(false, true)) {
+      try {
+        sksServer.startup();
+      } catch (Exception e) {
+        shutdownSksServer();
+        shutdownFragment();
+        return CompletableFuture.failedFuture(e);
+      }
+    }
+
     return service.startup().thenApply(s -> this);
   }
 
@@ -261,12 +294,21 @@ public final class ServerPubSub implements AutoCloseable {
               // from racing a subsequent server or namespace teardown
               writers.values().forEach(TargetVariablesWriter::deactivate);
               shutdownFragment();
+              shutdownSksServer();
             });
   }
 
   private void shutdownFragment() {
     if (fragment != null && fragmentStarted.get() && fragmentStopped.compareAndSet(false, true)) {
       fragment.shutdown();
+    }
+  }
+
+  private void shutdownSksServer() {
+    if (sksServer != null
+        && sksServerStarted.get()
+        && sksServerStopped.compareAndSet(false, true)) {
+      sksServer.shutdown();
     }
   }
 

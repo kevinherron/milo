@@ -18,6 +18,8 @@ import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.server.ManagedNamespaceWithLifecycle;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfig;
+import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfigBuilder;
+import org.eclipse.milo.opcua.sdk.server.RoleMapper;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
@@ -26,6 +28,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A minimal embedded {@link OpcUaServer} fixture for sdk-pubsub-server tests, modeled on the
@@ -74,12 +77,25 @@ final class TestPubSubServer implements AutoCloseable {
    * the test variables namespace started and registered.
    */
   static TestPubSubServer create() {
-    OpcUaServerConfig config =
+    return create(null);
+  }
+
+  /**
+   * Create a new {@link TestPubSubServer} whose server is configured with {@code roleMapper} (if
+   * non-null), making {@code Session.getRoleIds()} present for the authorization tests.
+   */
+  static TestPubSubServer create(@Nullable RoleMapper roleMapper) {
+    OpcUaServerConfigBuilder configBuilder =
         OpcUaServerConfig.builder()
             .setApplicationUri("urn:eclipse:milo:pubsub:test-server")
             .setApplicationName(LocalizedText.english("sdk-pubsub-server test server"))
-            .setProductUri("urn:eclipse:milo:pubsub:test-server")
-            .build();
+            .setProductUri("urn:eclipse:milo:pubsub:test-server");
+
+    if (roleMapper != null) {
+      configBuilder.setRoleMapper(roleMapper);
+    }
+
+    OpcUaServerConfig config = configBuilder.build();
 
     var server =
         new OpcUaServer(

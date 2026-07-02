@@ -40,6 +40,16 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- test-only: the WP-T4 SKS end-to-end tests pull keys from the embedded SKS server
+         face with the real SksSecurityKeyProvider; acyclic (sdk-pubsub-sks does not depend
+         on sdk-pubsub-server) -->
+    <dependency>
+      <groupId>org.eclipse.milo</groupId>
+      <artifactId>milo-sdk-pubsub-sks</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>

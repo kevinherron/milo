@@ -28,6 +28,8 @@ public final class ServerPubSubOptions {
   private final boolean allowRemoteConfiguration;
   private final @Nullable PubSubConfigurationStore configurationStore;
   private final boolean diagnosticsEnabled;
+  private final boolean sksServerEnabled;
+  private final PubSubMethodAuthorizer methodAuthorizer;
   private final PubSubBindings bindings;
 
   private ServerPubSubOptions(Builder builder) {
@@ -35,6 +37,8 @@ public final class ServerPubSubOptions {
     this.allowRemoteConfiguration = builder.allowRemoteConfiguration;
     this.configurationStore = builder.configurationStore;
     this.diagnosticsEnabled = builder.diagnosticsEnabled;
+    this.sksServerEnabled = builder.sksServerEnabled;
+    this.methodAuthorizer = builder.methodAuthorizer;
     this.bindings = builder.bindings;
   }
 
@@ -77,6 +81,27 @@ public final class ServerPubSubOptions {
   }
 
   /**
+   * Get whether the server acts as a minimal Part 14 Security Key Service for the SecurityGroups of
+   * the attached configuration, implementing the well-known {@code GetSecurityKeys} method.
+   *
+   * @return {@code true} if the SKS server face is enabled; defaults to {@code false}.
+   */
+  public boolean isSksServerEnabled() {
+    return sksServerEnabled;
+  }
+
+  /**
+   * Get the {@link PubSubMethodAuthorizer} consulted by the PubSub method handlers {@link
+   * ServerPubSub} installs.
+   *
+   * @return the {@link PubSubMethodAuthorizer}; defaults to {@link
+   *     PubSubMethodAuthorizer#defaultAuthorizer()}.
+   */
+  public PubSubMethodAuthorizer getMethodAuthorizer() {
+    return methodAuthorizer;
+  }
+
+  /**
    * Get the caller-supplied {@link PubSubBindings} merged into the bindings derived by {@link
    * ServerPubSub}.
    *
@@ -97,6 +122,8 @@ public final class ServerPubSubOptions {
     builder.allowRemoteConfiguration = allowRemoteConfiguration;
     builder.configurationStore = configurationStore;
     builder.diagnosticsEnabled = diagnosticsEnabled;
+    builder.sksServerEnabled = sksServerEnabled;
+    builder.methodAuthorizer = methodAuthorizer;
     builder.bindings = bindings;
     return builder;
   }
@@ -113,6 +140,8 @@ public final class ServerPubSubOptions {
         && allowRemoteConfiguration == that.allowRemoteConfiguration
         && Objects.equals(configurationStore, that.configurationStore)
         && diagnosticsEnabled == that.diagnosticsEnabled
+        && sksServerEnabled == that.sksServerEnabled
+        && methodAuthorizer.equals(that.methodAuthorizer)
         && bindings.equals(that.bindings);
   }
 
@@ -123,6 +152,8 @@ public final class ServerPubSubOptions {
         allowRemoteConfiguration,
         configurationStore,
         diagnosticsEnabled,
+        sksServerEnabled,
+        methodAuthorizer,
         bindings);
   }
 
@@ -142,6 +173,8 @@ public final class ServerPubSubOptions {
     private boolean allowRemoteConfiguration = false;
     private @Nullable PubSubConfigurationStore configurationStore;
     private boolean diagnosticsEnabled = false;
+    private boolean sksServerEnabled = false;
+    private PubSubMethodAuthorizer methodAuthorizer = PubSubMethodAuthorizer.defaultAuthorizer();
     private PubSubBindings bindings = PubSubBindings.builder().build();
 
     private Builder() {}
@@ -192,6 +225,41 @@ public final class ServerPubSubOptions {
      */
     public Builder diagnosticsEnabled(boolean value) {
       this.diagnosticsEnabled = value;
+      return this;
+    }
+
+    /**
+     * Set whether the server acts as a minimal Part 14 Security Key Service (SKS) for the
+     * SecurityGroups of the attached configuration.
+     *
+     * <p>When enabled, {@link ServerPubSub#startup()} implements the well-known {@code
+     * GetSecurityKeys} method ({@code i=15215} on the PublishSubscribe object) serving
+     * CSPRNG-generated, KeyLifetime-rotated keys for every SecurityGroup present in the attach-time
+     * configuration, guarded per Part 14 §8.3.2: {@code SignAndEncrypt} channel required ({@code
+     * Bad_SecurityModeInsufficient}), caller authorization via {@link
+     * PubSubMethodAuthorizer#checkKeyAccess} ({@code Bad_UserAccessDenied}, checked before
+     * existence), unknown SecurityGroupId {@code Bad_NotFound}. Independent of {@link
+     * #exposeInformationModel}. The SecurityGroup management methods (Add/RemoveSecurityGroup,
+     * folders, InvalidateKeys, ForceKeyRotation) and push distribution (SetSecurityKeys) remain
+     * unimplemented in this version.
+     *
+     * @param value {@code true} to enable the SKS server face.
+     * @return this {@link Builder}.
+     */
+    public Builder sksServerEnabled(boolean value) {
+      this.sksServerEnabled = value;
+      return this;
+    }
+
+    /**
+     * Set the {@link PubSubMethodAuthorizer} consulted by the PubSub method handlers {@link
+     * ServerPubSub} installs, replacing {@link PubSubMethodAuthorizer#defaultAuthorizer()}.
+     *
+     * @param methodAuthorizer the {@link PubSubMethodAuthorizer}.
+     * @return this {@link Builder}.
+     */
+    public Builder methodAuthorizer(PubSubMethodAuthorizer methodAuthorizer) {
+      this.methodAuthorizer = methodAuthorizer;
       return this;
     }
 

@@ -718,7 +718,11 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
         new Variant(orEmpty(reader.getDataSetReaderProperties(), KeyValuePair[]::new)));
 
     // reader-level security members are all Optional; omitted unless security is configured
-    if (reader.getSecurityMode() != null && reader.getSecurityMode() != MessageSecurityMode.None) {
+    // (Invalid is the Part 14 §6.2.9.9 "no override" sentinel emitted for readers without a
+    // MessageSecurityConfig override)
+    if (reader.getSecurityMode() != null
+        && reader.getSecurityMode() != MessageSecurityMode.None
+        && reader.getSecurityMode() != MessageSecurityMode.Invalid) {
       addPropertyNode(
           node,
           "SecurityMode",
