@@ -14,12 +14,18 @@ import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.function.Supplier;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.core.nodes.VariableNode;
@@ -32,13 +38,16 @@ import org.eclipse.milo.opcua.sdk.server.AddressSpaceFilter;
 import org.eclipse.milo.opcua.sdk.server.Lifecycle;
 import org.eclipse.milo.opcua.sdk.server.ManagedAddressSpaceFragmentWithLifecycle;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
+import org.eclipse.milo.opcua.sdk.server.Session;
 import org.eclipse.milo.opcua.sdk.server.SimpleAddressSpaceFilter;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
+import org.eclipse.milo.opcua.sdk.server.methods.AbstractMethodInvocationHandler.InvocationContext;
 import org.eclipse.milo.opcua.sdk.server.model.objects.DataSetReaderTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.DataSetWriterTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.NetworkAddressUrlTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubConnectionTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubStatusType;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubStatusTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PublishSubscribeType;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PublishedDataItemsTypeNode;
@@ -52,12 +61,15 @@ import org.eclipse.milo.opcua.sdk.server.model.objects.WriterGroupTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.BaseDataVariableTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.PropertyTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.SelectionListTypeNode;
+import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNodeContext;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaObjectNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
 import org.eclipse.milo.opcua.sdk.server.util.SubscriptionModel;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
+import org.eclipse.milo.opcua.stack.core.StatusCodes;
+import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
@@ -129,9 +141,28 @@ import org.slf4j.LoggerFactory;
  * <p>Live state: component Status/State variables are updated from {@link
  * PubSubService#addStateListener}, keyed by component name path so that reconfiguration (which
  * invalidates handles) does not break tracking; reader DataSetMetaData values are updated from
- * {@link PubSubService#addMetaDataListener}. Everything else reflects the attach-time configuration
- * only: reconfiguring via {@code ServerPubSub.runtime()} does <b>not</b> rebuild config-derived
- * nodes (a documented v1 limitation).
+ * {@link PubSubService#addMetaDataListener}.
+ *
+ * <p>Config-derived rebuild (Phase 5 pin R10): {@link #onConfigurationApplied(PubSubConfig)}
+ * reconciles the config-derived subtrees against a newly applied configuration, keyed by component
+ * name path, so a reconfigure no longer desyncs the model from the configuration. It is invoked
+ * after a remote {@code CloseAndUpdate} (via the {@link RemoteConfigurationListener} hand-off
+ * {@link ServerPubSub} wires in) and after {@link ServerPubSub#reconfigure}. Reconciliation is
+ * incremental at connection and top-level (PublishedDataSet) granularity: only connections and
+ * datasets whose normalized configuration differs (or that reference a changed dataset) are torn
+ * down and rebuilt, leaving unaffected subtrees — and any client subscriptions to them — untouched.
+ * A bare {@code ServerPubSub.runtime()} reconfigure still bypasses this hook (there is no
+ * engine-level reconfigure notification): callers that need the model kept in sync should
+ * reconfigure through {@link ServerPubSub#reconfigure} or the remote-configuration file model.
+ *
+ * <p>Enable/Disable (Phase 5 pin, §9.1.10): when remote configuration is enabled ({@link
+ * ServerPubSubOptions#isAllowRemoteConfiguration()}), each config-derived Status object also
+ * carries callable {@code Enable} and {@code Disable} methods that delegate to {@link
+ * PubSubService#enable} / {@link PubSubService#disable} for the component, after consulting {@link
+ * PubSubMethodAuthorizer#checkConfigure}. They enforce the §9.1.10 current-state rules ({@code
+ * Bad_InvalidState} when Enable is called on a non-Disabled component or Disable on a Disabled one)
+ * and are not configuration mutations (no store save). When remote configuration is off the Status
+ * objects stay read-only (State variable only), preserving the S8/S9 read-only posture.
  *
  * <p>Created by {@link ServerPubSub} when {@link ServerPubSubOptions#isExposeInformationModel()} is
  * {@code true}; {@link #startup()} and {@link #shutdown()} are driven by the owning {@link
@@ -169,6 +200,27 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private final PubSubService service;
   private final UShort namespaceIndex;
 
+  /** Authorizes Enable/Disable calls (pin R9); reused from the shipped Phase 4 SPI. */
+  private final PubSubMethodAuthorizer authorizer;
+
+  /**
+   * Whether the config-derived Status objects host callable Enable/Disable methods. Gated on {@link
+   * ServerPubSubOptions#isAllowRemoteConfiguration()} so the read-only exposure stays read-only.
+   */
+  private final boolean enableDisableSupported;
+
+  /**
+   * Serializes {@link #onConfigurationApplied(PubSubConfig)} and guards {@link
+   * #builtConfiguration}.
+   */
+  private final Object rebuildLock = new Object();
+
+  /**
+   * The last-built normalized configuration; the baseline the R10 rebuild diffs against. Null until
+   * the fragment has started and built its initial nodes.
+   */
+  private volatile @Nullable PubSubConfiguration2DataType builtConfiguration;
+
   PubSubInfoModelFragment(
       OpcUaServer server, PubSubConfig config, PubSubService service, ServerPubSubOptions options) {
 
@@ -176,6 +228,8 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     this.config = config;
     this.service = service;
+    this.authorizer = options.getMethodAuthorizer();
+    this.enableDisableSupported = options.isAllowRemoteConfiguration();
 
     namespaceIndex = server.getServerNamespace().getNamespaceIndex();
 
@@ -193,6 +247,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
                 buildNodes(configuration);
                 populateExistingNs0Nodes(configuration);
 
+                builtConfiguration = configuration;
                 active = true;
                 registerListeners();
               }
@@ -343,7 +398,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     buildAddressNodes(node, connection.getAddress());
 
-    addStatusNodes(node, name, initialState(service.components().connection(name)));
+    addStatusNodes(node, name, () -> service.components().connection(name));
 
     WriterGroupDataType[] writerGroups =
         orEmpty(connection.getWriterGroups(), WriterGroupDataType[]::new);
@@ -446,8 +501,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
         ValueRanks.Scalar,
         new Variant(nullToEmpty(group.getHeaderLayoutUri())));
 
-    addStatusNodes(
-        node, path, initialState(service.components().writerGroup(connectionName, name)));
+    addStatusNodes(node, path, () -> service.components().writerGroup(connectionName, name));
 
     if (group.getMessageSettings() instanceof UadpWriterGroupMessageDataType uadp) {
       UadpWriterGroupMessageTypeNode messageSettings =
@@ -546,9 +600,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
         new Variant(orEmpty(writer.getDataSetWriterProperties(), KeyValuePair[]::new)));
 
     addStatusNodes(
-        node,
-        path,
-        initialState(service.components().dataSetWriter(connectionName, groupName, name)));
+        node, path, () -> service.components().dataSetWriter(connectionName, groupName, name));
 
     if (writer.getMessageSettings() instanceof UadpDataSetWriterMessageDataType uadp) {
       UadpDataSetWriterMessageTypeNode messageSettings =
@@ -622,8 +674,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     addGroupPropertyNodes(node, group);
 
-    addStatusNodes(
-        node, path, initialState(service.components().readerGroup(connectionName, name)));
+    addStatusNodes(node, path, () -> service.components().readerGroup(connectionName, name));
 
     DataSetReaderDataType[] readers =
         orEmpty(group.getDataSetReaders(), DataSetReaderDataType[]::new);
@@ -749,9 +800,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     }
 
     addStatusNodes(
-        node,
-        path,
-        initialState(service.components().dataSetReader(connectionName, groupName, name)));
+        node, path, () -> service.components().dataSetReader(connectionName, groupName, name));
 
     if (reader.getMessageSettings() instanceof UadpDataSetReaderMessageDataType uadp) {
       buildReaderMessageSettingsNodes(node, nodeId, uadp);
@@ -917,9 +966,13 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   /**
    * Add a Status object with a State variable to {@code parent} and register the State variable
-   * under {@code componentPath} for live updates.
+   * under {@code componentPath} for live updates. When Enable/Disable are supported, also mints the
+   * two Optional §9.1.10 methods on the Status object, resolving the component handle live through
+   * {@code handleSupplier} on each call.
    */
-  private void addStatusNodes(UaNode parent, String componentPath, PubSubState initialState) {
+  private void addStatusNodes(
+      UaNode parent, String componentPath, Supplier<Optional<PubSubHandle>> handleSupplier) {
+
     PubSubStatusTypeNode statusNode =
         addObjectNode(
             PubSubStatusTypeNode::new,
@@ -930,9 +983,136 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
             parent.getNodeId());
 
     BaseDataVariableTypeNode stateNode =
-        addVariableNode(statusNode, "State", NodeIds.PubSubState, new Variant(initialState));
+        addVariableNode(
+            statusNode,
+            "State",
+            NodeIds.PubSubState,
+            new Variant(initialState(handleSupplier.get())));
 
     stateVariables.put(componentPath, stateNode);
+
+    if (enableDisableSupported) {
+      UaMethodNode enable = addMethodNode(statusNode, "Enable");
+      enable.setInvocationHandler(new EnableMethodImpl(enable, handleSupplier));
+
+      UaMethodNode disable = addMethodNode(statusNode, "Disable");
+      disable.setInvocationHandler(new DisableMethodImpl(disable, handleSupplier));
+    }
+  }
+
+  /**
+   * Mint an argument-less method node under {@code parent} (HasComponent), added to this fragment's
+   * node manager with the inverse reference so the parent browses the forward HasComponent.
+   */
+  private UaMethodNode addMethodNode(UaNode parent, String name) {
+    NodeId nodeId = childNodeId(parent, name);
+
+    UaMethodNode node =
+        UaMethodNode.builder(getNodeContext())
+            .setNodeId(nodeId)
+            .setBrowseName(new QualifiedName(0, name))
+            .setDisplayName(LocalizedText.english(name))
+            .build();
+
+    getNodeManager().addNode(node);
+
+    node.addReference(
+        new Reference(
+            nodeId,
+            NodeIds.HasComponent,
+            parent.getNodeId().expanded(),
+            Reference.Direction.INVERSE));
+
+    return node;
+  }
+
+  // endregion
+
+  // region Enable/Disable method handlers
+
+  private final class EnableMethodImpl extends PubSubStatusType.EnableMethod {
+
+    private final Supplier<Optional<PubSubHandle>> handleSupplier;
+
+    EnableMethodImpl(UaMethodNode node, Supplier<Optional<PubSubHandle>> handleSupplier) {
+      super(node);
+      this.handleSupplier = handleSupplier;
+    }
+
+    @Override
+    protected void invoke(InvocationContext context) throws UaException {
+      requireConfigureSession(context);
+      PubSubHandle handle = requireHandle();
+
+      // §9.1.10.2: Enable is rejected unless the current State is Disabled.
+      if (currentState(handle) != PubSubState.Disabled) {
+        throw new UaException(
+            StatusCodes.Bad_InvalidState, "Enable requires the current State to be Disabled");
+      }
+      service.enable(handle);
+    }
+
+    private PubSubHandle requireHandle() throws UaException {
+      return handleSupplier
+          .get()
+          .orElseThrow(
+              () -> new UaException(StatusCodes.Bad_InvalidState, "component is not available"));
+    }
+  }
+
+  private final class DisableMethodImpl extends PubSubStatusType.DisableMethod {
+
+    private final Supplier<Optional<PubSubHandle>> handleSupplier;
+
+    DisableMethodImpl(UaMethodNode node, Supplier<Optional<PubSubHandle>> handleSupplier) {
+      super(node);
+      this.handleSupplier = handleSupplier;
+    }
+
+    @Override
+    protected void invoke(InvocationContext context) throws UaException {
+      requireConfigureSession(context);
+      PubSubHandle handle =
+          handleSupplier
+              .get()
+              .orElseThrow(
+                  () ->
+                      new UaException(StatusCodes.Bad_InvalidState, "component is not available"));
+
+      // §9.1.10.3: Disable is rejected if the current State is already Disabled.
+      if (currentState(handle) == PubSubState.Disabled) {
+        throw new UaException(
+            StatusCodes.Bad_InvalidState, "Disable requires the current State to not be Disabled");
+      }
+      service.disable(handle);
+    }
+  }
+
+  /**
+   * Enforce the pin R9 posture for the Enable/Disable methods: a client session is required
+   * (session-less internal calls are {@code Bad_UserAccessDenied}) and {@link
+   * PubSubMethodAuthorizer#checkConfigure} must allow.
+   */
+  private void requireConfigureSession(InvocationContext context) throws UaException {
+    Session session = context.getSession().orElse(null);
+    if (session == null) {
+      throw new UaException(StatusCodes.Bad_UserAccessDenied, "no session");
+    }
+    if (authorizer.checkConfigure(session) != PubSubMethodAuthorizer.Decision.ALLOW) {
+      throw new UaException(StatusCodes.Bad_UserAccessDenied);
+    }
+  }
+
+  /**
+   * Read the live state of {@code handle}, mapping an invalidated handle to {@code
+   * Bad_InvalidState}.
+   */
+  private PubSubState currentState(PubSubHandle handle) throws UaException {
+    try {
+      return service.state(handle);
+    } catch (IllegalArgumentException e) {
+      throw new UaException(StatusCodes.Bad_InvalidState, "component handle is invalid");
+    }
   }
 
   // endregion
@@ -1231,6 +1411,205 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
           }
         });
   }
+
+  // endregion
+
+  // region config-derived rebuild (pin R10)
+
+  /**
+   * Reconcile the config-derived subtrees against {@code appliedConfig}, the configuration a
+   * reconfigure just applied to the engine (pin R10). Connections and PublishedDataSets whose
+   * normalized {@code DataType} differs from the last-built configuration — and connections whose
+   * DataSetWriters reference a changed PublishedDataSet — are torn down and rebuilt from {@code
+   * appliedConfig}; unaffected subtrees are left in place. The root Status/State and
+   * ConfigurationProperties are refreshed to match. No-op if the fragment is not active.
+   *
+   * <p>Called on the thread that applied the reconfigure (a server method-call thread for {@code
+   * CloseAndUpdate}, or the caller of {@link ServerPubSub#reconfigure}); serialized against itself
+   * by {@link #rebuildLock}.
+   *
+   * @param appliedConfig the configuration now in effect on the engine.
+   */
+  void onConfigurationApplied(PubSubConfig appliedConfig) {
+    synchronized (rebuildLock) {
+      PubSubConfiguration2DataType previous = builtConfiguration;
+      if (!active || previous == null) {
+        return;
+      }
+
+      PubSubConfiguration2DataType applied =
+          appliedConfig.toDataType(getServer().getNamespaceTable());
+
+      Set<String> changedDataSets = reconcilePublishedDataSets(previous, applied);
+
+      var dataSetNodeIds = new HashMap<String, NodeId>();
+      for (PublishedDataSetDataType dataSet :
+          orEmpty(applied.getPublishedDataSets(), PublishedDataSetDataType[]::new)) {
+        if (dataSet != null && dataSet.getName() != null) {
+          dataSetNodeIds.put(
+              dataSet.getName(),
+              new NodeId(
+                  namespaceIndex, NODE_ID_PREFIX + "/PublishedDataSets/" + dataSet.getName()));
+        }
+      }
+
+      reconcileConnections(previous, applied, dataSetNodeIds, changedDataSets);
+
+      refreshRootFromConfig(applied, appliedConfig.isEnabled());
+
+      builtConfiguration = applied;
+    }
+  }
+
+  /**
+   * Reconcile the PublishedDataSet subtrees; returns the set of dataset names whose configuration
+   * was added, removed, or changed (so connections referencing them can be rebuilt to re-establish
+   * their DataSetToWriter references).
+   */
+  private Set<String> reconcilePublishedDataSets(
+      PubSubConfiguration2DataType previous, PubSubConfiguration2DataType applied) {
+
+    Map<String, PublishedDataSetDataType> oldByName =
+        byName(previous.getPublishedDataSets(), PublishedDataSetDataType::getName);
+    Map<String, PublishedDataSetDataType> newByName =
+        byName(applied.getPublishedDataSets(), PublishedDataSetDataType::getName);
+
+    var changed = new LinkedHashSet<String>();
+    for (String name : union(oldByName.keySet(), newByName.keySet())) {
+      PublishedDataSetDataType oldDataSet = oldByName.get(name);
+      PublishedDataSetDataType newDataSet = newByName.get(name);
+
+      if (Objects.equals(oldDataSet, newDataSet)) {
+        continue;
+      }
+      changed.add(name);
+
+      if (oldDataSet != null) {
+        deleteSubtree(new NodeId(namespaceIndex, NODE_ID_PREFIX + "/PublishedDataSets/" + name));
+      }
+      if (newDataSet != null) {
+        buildPublishedDataSetNodes(newDataSet);
+      }
+    }
+    return changed;
+  }
+
+  /** Reconcile the connection subtrees (connection-shell granularity: rebuild the whole tree). */
+  private void reconcileConnections(
+      PubSubConfiguration2DataType previous,
+      PubSubConfiguration2DataType applied,
+      Map<String, NodeId> dataSetNodeIds,
+      Set<String> changedDataSets) {
+
+    Map<String, PubSubConnectionDataType> oldByName =
+        byName(previous.getConnections(), PubSubConnectionDataType::getName);
+    Map<String, PubSubConnectionDataType> newByName =
+        byName(applied.getConnections(), PubSubConnectionDataType::getName);
+
+    for (String name : union(oldByName.keySet(), newByName.keySet())) {
+      PubSubConnectionDataType oldConnection = oldByName.get(name);
+      PubSubConnectionDataType newConnection = newByName.get(name);
+
+      boolean unchanged =
+          Objects.equals(oldConnection, newConnection)
+              && (newConnection == null
+                  || !referencesChangedDataSet(newConnection, changedDataSets));
+      if (unchanged) {
+        continue;
+      }
+
+      if (oldConnection != null) {
+        deleteSubtree(new NodeId(namespaceIndex, NODE_ID_PREFIX + "/" + name));
+        purgeTracking(name);
+      }
+      if (newConnection != null) {
+        buildConnectionNodes(newConnection, dataSetNodeIds);
+      }
+    }
+  }
+
+  /**
+   * True if any DataSetWriter in {@code connection} references a dataset in {@code changedNames}.
+   */
+  private static boolean referencesChangedDataSet(
+      PubSubConnectionDataType connection, Set<String> changedNames) {
+
+    if (changedNames.isEmpty()) {
+      return false;
+    }
+    for (WriterGroupDataType group :
+        orEmpty(connection.getWriterGroups(), WriterGroupDataType[]::new)) {
+      if (group == null) {
+        continue;
+      }
+      for (DataSetWriterDataType writer :
+          orEmpty(group.getDataSetWriters(), DataSetWriterDataType[]::new)) {
+        if (writer != null && changedNames.contains(writer.getDataSetName())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Delete the node with {@code nodeId} and its entire child subtree from this fragment's node
+   * manager (a no-op if absent). {@link UaNode#delete()} recurses through the hierarchical
+   * (HasComponent-subtype) references — HasWriterGroup, HasDataSetReader, HasProperty, ... — and
+   * removes each reference and its inverse, including the forward reference the ns0 parent browses;
+   * the non-hierarchical DataSetToWriter reference is removed (both directions) but not recursed,
+   * so a referenced PublishedDataSet is not deleted with a writer.
+   */
+  private void deleteSubtree(NodeId nodeId) {
+    getNodeManager().getNode(nodeId).ifPresent(UaNode::delete);
+  }
+
+  /** Drop live-update tracking entries for {@code path} and every descendant path. */
+  private void purgeTracking(String path) {
+    stateVariables.keySet().removeIf(key -> key.equals(path) || key.startsWith(path + "/"));
+    metaDataVariables.keySet().removeIf(key -> key.equals(path) || key.startsWith(path + "/"));
+  }
+
+  /** Refresh the ns0 root ConfigurationProperties and Status/State after a reconfigure. */
+  private void refreshRootFromConfig(PubSubConfiguration2DataType configuration, boolean enabled) {
+    getServer()
+        .getAddressSpaceManager()
+        .getManagedNode(NodeIds.PublishSubscribe)
+        .ifPresent(
+            node ->
+                setExistingPropertyValue(
+                    node,
+                    PublishSubscribeType.CONFIGURATION_PROPERTIES.getBrowseName(),
+                    new Variant(
+                        orEmpty(configuration.getConfigurationProperties(), KeyValuePair[]::new))));
+
+    setRootState(enabled ? PubSubState.Operational : PubSubState.Disabled);
+  }
+
+  /** Index {@code values} by name (skipping nulls), keyed by the empty-normalized name. */
+  private static <T> Map<String, T> byName(
+      T @Nullable [] values, Function<T, @Nullable String> nameOf) {
+
+    var map = new LinkedHashMap<String, T>();
+    if (values != null) {
+      for (T value : values) {
+        if (value != null) {
+          map.put(nullToEmpty(nameOf.apply(value)), value);
+        }
+      }
+    }
+    return map;
+  }
+
+  private static Set<String> union(Set<String> a, Set<String> b) {
+    var union = new LinkedHashSet<String>(a);
+    union.addAll(b);
+    return union;
+  }
+
+  // endregion
+
+  // region live state
 
   /**
    * Only components with Status nodes in this exposure are tracked; other component types (e.g.

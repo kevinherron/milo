@@ -10,6 +10,7 @@
 
 package org.eclipse.milo.opcua.sdk.pubsub.server;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,11 +29,13 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.StandaloneSubscribedDataSetConfi
 import org.eclipse.milo.opcua.sdk.pubsub.config.TargetVariableConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.TargetVariablesConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UdpDatagramAddress;
+import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.ULong;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -41,8 +44,8 @@ import org.junit.jupiter.api.Test;
  * Attach-time validation per pinned decision S4: every {@link NodeFieldAddress} in the effective
  * configuration — published dataset field sources, direct reader TargetVariables targets, and
  * standalone subscribed dataset TargetVariables targets — must resolve against the server's
- * NamespaceTable, and TargetVariables index ranges must parse; {@code
- * allowRemoteConfiguration(true)} is rejected with {@link UnsupportedOperationException}.
+ * NamespaceTable, and TargetVariables index ranges must parse. {@code
+ * allowRemoteConfiguration(true)} now attaches the remote-configuration FileType model (WP-X).
  */
 class ServerPubSubAttachValidationTest {
 
@@ -220,15 +223,16 @@ class ServerPubSubAttachValidationTest {
   }
 
   @Test
-  void allowRemoteConfigurationFailsAttachWithUnsupportedOperationException() {
+  void allowRemoteConfigurationAttaches() {
     PubSubConfig config = PubSubConfig.builder().build();
 
     ServerPubSubOptions options =
         ServerPubSubOptions.builder().allowRemoteConfiguration(true).build();
 
-    assertThrows(
-        UnsupportedOperationException.class,
-        () -> ServerPubSub.attach(testServer.getServer(), config, options));
+    // no longer throws: the FileType remote-configuration model attaches (not started here)
+    ServerPubSub serverPubSub = ServerPubSub.attach(testServer.getServer(), config, options);
+    assertNotNull(serverPubSub.runtime());
+    serverPubSub.close();
   }
 
   @Test
@@ -248,6 +252,39 @@ class ServerPubSubAttachValidationTest {
     ServerPubSub serverPubSub = ServerPubSub.attach(testServer.getServer(), config);
     assertNotNull(serverPubSub.runtime());
     serverPubSub.close();
+  }
+
+  @Test
+  void disabledRemoteConfigInitializesFileTypeSizeWithoutSerializingTheConfig() {
+    // a reader group carries no TransportSettings/MessageSettings (the codec cannot encode those
+    // as null) and the TargetVariable uses a FieldNameSelector with no configured DataSetMetaData
+    // (the mapper cannot resolve a DataSetFieldId): both make the configuration unserializable to
+    // PubSubConfiguration2DataType, yet it is legal for a locally-configured server. Attach must
+    // not serialize at attach; Size is reported as 0 (FileType-contract open question 4).
+    PubSubConfig config =
+        readerConfig(
+            TargetVariablesConfig.builder()
+                .map(
+                    FieldSelector.byName("temperature"),
+                    TargetVariableConfig.builder().target(resolvableTarget()).build())
+                .build());
+
+    ServerPubSub serverPubSub = ServerPubSub.attach(testServer.getServer(), config);
+    try {
+      Object size =
+          ((UaVariableNode)
+                  testServer
+                      .getServer()
+                      .getAddressSpaceManager()
+                      .getManagedNode(NodeIds.PublishSubscribe_PubSubConfiguration_Size)
+                      .orElseThrow())
+              .getValue()
+              .getValue()
+              .getValue();
+      assertEquals(ULong.valueOf(0), size);
+    } finally {
+      serverPubSub.close();
+    }
   }
 
   // region fixtures

@@ -195,8 +195,13 @@ public final class ServerPubSubOptions {
      * Set whether remote configuration of the PubSub runtime via the server's information model is
      * allowed.
      *
-     * <p>Not supported in this version: attaching with {@code true} throws {@link
-     * UnsupportedOperationException}.
+     * <p>When enabled, {@link ServerPubSub} implements the Part 14 §9.1.3.7 {@code
+     * PublishSubscribe/PubSubConfiguration} FileType object ({@code i=25451}) — {@code Open}/{@code
+     * Close}/{@code Read}/{@code Write}/{@code GetPosition}/{@code SetPosition} plus {@code
+     * ReserveIds} and {@code CloseAndUpdate} — so authorized clients can read and atomically update
+     * the whole PubSub configuration. Every handler consults {@link
+     * PubSubMethodAuthorizer#checkConfigure}; successful updates are persisted through the
+     * configured {@link PubSubConfigurationStore}. Independent of {@link #exposeInformationModel}.
      *
      * @param value {@code true} to allow remote configuration.
      * @return this {@link Builder}.

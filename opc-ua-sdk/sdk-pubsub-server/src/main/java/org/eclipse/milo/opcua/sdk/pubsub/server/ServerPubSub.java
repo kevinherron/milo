@@ -10,6 +10,9 @@
 
 package org.eclipse.milo.opcua.sdk.pubsub.server;
 
+import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ulong;
+import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -30,6 +33,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.PubSubBindings;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubServiceConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.PublishedDataSetSource;
+import org.eclipse.milo.opcua.sdk.pubsub.ReconfigureResult;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.FieldDefinition;
 import org.eclipse.milo.opcua.sdk.pubsub.config.NodeFieldAddress;
@@ -44,8 +48,13 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.StandaloneSubscribedDataSetRef;
 import org.eclipse.milo.opcua.sdk.pubsub.config.TargetVariableConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.TargetVariablesConfig;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
+import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
 import org.eclipse.milo.opcua.stack.core.NamespaceTable;
+import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
+import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -101,14 +110,29 @@ public final class ServerPubSub implements AutoCloseable {
   private static final Logger LOGGER = LoggerFactory.getLogger(ServerPubSub.class);
 
   private final ConcurrentMap<String, AtomicLong> writeErrorCounters = new ConcurrentHashMap<>();
-  private final AtomicBoolean fragmentStarted = new AtomicBoolean(false);
-  private final AtomicBoolean fragmentStopped = new AtomicBoolean(false);
   private final AtomicBoolean sksServerStarted = new AtomicBoolean(false);
   private final AtomicBoolean sksServerStopped = new AtomicBoolean(false);
+  private final AtomicBoolean remoteConfigStarted = new AtomicBoolean(false);
+  private final AtomicBoolean remoteConfigStopped = new AtomicBoolean(false);
+
+  /**
+   * Serializes the fragment's startup and shutdown so they cannot interleave, and records whether a
+   * start was attempted and whether shutdown was requested. Fixes the Phase 2 {@code
+   * fragmentStarted} CAS-vs-close race: with the two prior {@link AtomicBoolean}s, {@code
+   * fragmentStarted} was set before {@code fragment.startup()} finished, so a concurrent {@link
+   * #shutdown()} could run {@code fragment.shutdown()} while startup was still building nodes (or
+   * before it had reached RUNNING), and a {@link #shutdown()} that ran before {@link #startup()}
+   * left nothing to stop a later start.
+   */
+  private final Object fragmentLifecycleLock = new Object();
+
+  private boolean fragmentStartAttempted = false;
+  private boolean fragmentShutdownRequested = false;
 
   private final PubSubService service;
   private final @Nullable PubSubInfoModelFragment fragment;
   private final @Nullable SksServer sksServer;
+  private final @Nullable RemoteConfigurationServer remoteConfigurationServer;
 
   /** The automatic TargetVariables writers, keyed by reader path; deactivated at shutdown. */
   private final Map<String, TargetVariablesWriter> writers;
@@ -157,6 +181,60 @@ public final class ServerPubSub implements AutoCloseable {
         options.isExposeInformationModel()
             ? new PubSubInfoModelFragment(server, config, service, options)
             : null;
+
+    // pin R10: after a CloseAndUpdate applies a configuration change, the information-model
+    // fragment (if exposed) rebuilds the affected config-derived subtrees so the model tracks the
+    // new configuration; with no exposed fragment there is nothing to rebuild (NO_OP)
+    this.remoteConfigurationServer =
+        options.isAllowRemoteConfiguration()
+            ? new RemoteConfigurationServer(
+                server, service, config, options, reconfigureListenerFor(fragment))
+            : null;
+
+    if (remoteConfigurationServer == null) {
+      // when remote configuration is enabled the RemoteConfigurationServer initializes these at
+      // startup; otherwise nothing else populates them and they stay at the ns0 loader's NULL
+      initializeFileTypePropertiesForDisabledRemoteConfig(server);
+    }
+  }
+
+  /**
+   * Initialize the Mandatory FileType properties on {@code i=25451} at attach time when remote
+   * configuration is disabled (pin R3; FileType-contract open question 9). The ns0 loader ships
+   * {@code Writable}/{@code UserWritable}/{@code OpenCount}/{@code Size} as {@code NULL}; with no
+   * {@link RemoteConfigurationServer} to populate them, a client reading them would otherwise see
+   * {@code null}. The file cannot be opened (for read or write), so {@code Writable}/{@code
+   * UserWritable} are {@code false} and {@code OpenCount} is {@code 0}.
+   *
+   * <p>{@code Size} is reported as {@code 0}: with remote configuration disabled the virtual file
+   * can never be opened, so no read snapshot exists, and FileType-contract open question 4 permits
+   * {@code 0} while no handle is open. The configuration is deliberately NOT serialized here to
+   * derive a size. A configuration that is legal for a locally-configured server need not be
+   * serializable to {@link
+   * org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType} — for example
+   * a {@code FieldNameSelector} TargetVariable resolves against runtime metadata but cannot be
+   * mapped to a DataSetFieldId without configured DataSetMetaData — so serializing at attach would
+   * reject configurations that the runtime otherwise accepts.
+   */
+  private static void initializeFileTypePropertiesForDisabledRemoteConfig(OpcUaServer server) {
+
+    setFileTypeValue(
+        server, NodeIds.PublishSubscribe_PubSubConfiguration_Writable, new Variant(false));
+    setFileTypeValue(
+        server, NodeIds.PublishSubscribe_PubSubConfiguration_UserWritable, new Variant(false));
+    setFileTypeValue(
+        server, NodeIds.PublishSubscribe_PubSubConfiguration_OpenCount, new Variant(ushort(0)));
+    setFileTypeValue(
+        server, NodeIds.PublishSubscribe_PubSubConfiguration_Size, new Variant(ulong(0)));
+  }
+
+  private static void setFileTypeValue(OpcUaServer server, NodeId nodeId, Variant value) {
+    server
+        .getAddressSpaceManager()
+        .getManagedNode(nodeId)
+        .filter(UaVariableNode.class::isInstance)
+        .map(UaVariableNode.class::cast)
+        .ifPresent(node -> node.setValue(new DataValue(value)));
   }
 
   /**
@@ -186,8 +264,6 @@ public final class ServerPubSub implements AutoCloseable {
    *     PubSubConfigurationStore} supplies a stored configuration.
    * @param options the {@link ServerPubSubOptions} governing the attachment.
    * @return a new {@link ServerPubSub}, not yet started.
-   * @throws UnsupportedOperationException if {@code options} enables remote configuration, which is
-   *     not supported in this version.
    * @throws PubSubConfigValidationException if a {@link NodeFieldAddress} in the effective
    *     configuration cannot be resolved against the server's {@link NamespaceTable}, a
    *     TargetVariables index range cannot be parsed, a stored configuration does not map to a
@@ -196,11 +272,6 @@ public final class ServerPubSub implements AutoCloseable {
    */
   public static ServerPubSub attach(
       OpcUaServer server, PubSubConfig config, ServerPubSubOptions options) {
-
-    if (options.isAllowRemoteConfiguration()) {
-      throw new UnsupportedOperationException(
-          "allowRemoteConfiguration is not supported in this version");
-    }
 
     NamespaceTable namespaceTable = server.getNamespaceTable();
 
@@ -247,15 +318,23 @@ public final class ServerPubSub implements AutoCloseable {
    *     has finished, or completes exceptionally if startup fails.
    */
   public CompletableFuture<ServerPubSub> startup() {
-    if (fragment != null && fragmentStarted.compareAndSet(false, true)) {
-      try {
-        fragment.startup();
-      } catch (Exception e) {
-        // unregister the half-built fragment (its lifecycle reached RUNNING before the
-        // failure, so shutdown is legal and unregisters cleanly) and surface the failure
-        // on the returned future rather than throwing synchronously
-        shutdownFragment();
-        return CompletableFuture.failedFuture(e);
+    if (fragment != null) {
+      synchronized (fragmentLifecycleLock) {
+        // start at most once, and never after a shutdown was already requested; the whole
+        // start/stop of the fragment runs under fragmentLifecycleLock so a concurrent shutdown
+        // cannot interleave with (or precede completion of) fragment.startup()
+        if (!fragmentStartAttempted && !fragmentShutdownRequested) {
+          fragmentStartAttempted = true;
+          try {
+            fragment.startup();
+          } catch (Exception e) {
+            // unregister the half-built fragment (its lifecycle reached RUNNING before the
+            // failure, so shutdown is legal and unregisters cleanly) and surface the failure
+            // on the returned future rather than throwing synchronously
+            shutdownFragmentLocked();
+            return CompletableFuture.failedFuture(e);
+          }
+        }
       }
     }
 
@@ -263,6 +342,17 @@ public final class ServerPubSub implements AutoCloseable {
       try {
         sksServer.startup();
       } catch (Exception e) {
+        shutdownSksServer();
+        shutdownFragment();
+        return CompletableFuture.failedFuture(e);
+      }
+    }
+
+    if (remoteConfigurationServer != null && remoteConfigStarted.compareAndSet(false, true)) {
+      try {
+        remoteConfigurationServer.startup();
+      } catch (Exception e) {
+        shutdownRemoteConfigurationServer();
         shutdownSksServer();
         shutdownFragment();
         return CompletableFuture.failedFuture(e);
@@ -293,13 +383,54 @@ public final class ServerPubSub implements AutoCloseable {
               // write still in flight on the DataSet dispatch path and prevents stragglers
               // from racing a subsequent server or namespace teardown
               writers.values().forEach(TargetVariablesWriter::deactivate);
+              shutdownRemoteConfigurationServer();
               shutdownFragment();
               shutdownSksServer();
             });
   }
 
+  /**
+   * The R10 rebuild hand-off: delegates a {@code CloseAndUpdate} reconfigure to the
+   * information-model fragment when one is exposed, or {@link RemoteConfigurationListener#NO_OP}
+   * otherwise. Taking the fragment as a parameter (rather than capturing the field) narrows its
+   * nullness for the lambda.
+   */
+  private static RemoteConfigurationListener reconfigureListenerFor(
+      @Nullable PubSubInfoModelFragment fragment) {
+
+    if (fragment == null) {
+      return RemoteConfigurationListener.NO_OP;
+    }
+    return (appliedConfig, result) -> fragment.onConfigurationApplied(appliedConfig);
+  }
+
+  private void shutdownRemoteConfigurationServer() {
+    if (remoteConfigurationServer != null
+        && remoteConfigStarted.get()
+        && remoteConfigStopped.compareAndSet(false, true)) {
+      remoteConfigurationServer.shutdown();
+    }
+  }
+
   private void shutdownFragment() {
-    if (fragment != null && fragmentStarted.get() && fragmentStopped.compareAndSet(false, true)) {
+    synchronized (fragmentLifecycleLock) {
+      shutdownFragmentLocked();
+    }
+  }
+
+  /**
+   * Shut the fragment down; must be called while holding {@link #fragmentLifecycleLock}. Marks
+   * shutdown as requested (blocking any later start) and calls {@code fragment.shutdown()} only if
+   * a start was attempted and not already stopped, so it is safe when interleaved with, or ordered
+   * before, {@link #startup()}.
+   */
+  private void shutdownFragmentLocked() {
+    if (fragment == null) {
+      return;
+    }
+    boolean startedAndNotStopped = fragmentStartAttempted && !fragmentShutdownRequested;
+    fragmentShutdownRequested = true;
+    if (startedAndNotStopped) {
       fragment.shutdown();
     }
   }
@@ -315,14 +446,48 @@ public final class ServerPubSub implements AutoCloseable {
   /**
    * Get the underlying {@link PubSubService} runtime; the full standalone API remains available.
    *
-   * <p>Note: automatic bindings and the exposed information model reflect the attach-time
-   * configuration. Reconfiguring via the runtime does not re-derive address-space sources or
-   * TargetVariables writers, and does not rebuild configuration-derived information model nodes.
+   * <p>Note: automatic bindings reflect the attach-time configuration, and reconfiguring directly
+   * through this runtime does not re-derive address-space sources or TargetVariables writers, nor
+   * rebuild the configuration-derived information model nodes (the engine exposes no reconfigure
+   * notification). To keep an exposed information model in sync, reconfigure through {@link
+   * #reconfigure} or the remote-configuration file model instead of {@code runtime().reconfigure}.
    *
    * @return the underlying {@link PubSubService}.
    */
   public PubSubService runtime() {
     return service;
+  }
+
+  /**
+   * Reconfigure the runtime and rebuild the exposed information model to match (pin R10).
+   *
+   * <p>Equivalent to {@link PubSubService#reconfigure} on {@link #runtime()}, except that when the
+   * information model is exposed ({@link ServerPubSubOptions#isExposeInformationModel()}) the
+   * config-derived subtrees are reconciled to {@code newConfig} afterward so they do not desync
+   * from the configuration. Like {@code runtime().reconfigure}, this does not re-derive automatic
+   * address-space bindings or TargetVariables writers and does not persist through a configured
+   * {@link PubSubConfigurationStore} (only the remote-configuration file model persists, per pin
+   * R8).
+   *
+   * @param newConfig the new {@link PubSubConfig}.
+   * @param mode the {@link PubSubService.ReconfigureMode} governing how affected components
+   *     restart.
+   * @return the {@link ReconfigureResult} listing the added, removed, and restarted components.
+   * @throws org.eclipse.milo.opcua.stack.core.UaRuntimeException if {@code newConfig} fails a
+   *     validation enforced by {@link PubSubService#reconfigure}; the information model is not
+   *     rebuilt in that case (no change was applied).
+   */
+  public ReconfigureResult reconfigure(PubSubConfig newConfig, PubSubService.ReconfigureMode mode) {
+    ReconfigureResult result = service.reconfigure(newConfig, mode);
+    if (fragment != null) {
+      fragment.onConfigurationApplied(newConfig);
+    }
+    if (remoteConfigurationServer != null) {
+      // keep the remote-config file model (its read snapshot, VersionTime and CloseAndUpdate
+      // base) in sync so a later CloseAndUpdate does not revert this programmatic change
+      remoteConfigurationServer.onExternalReconfigure(newConfig);
+    }
+    return result;
   }
 
   /**
