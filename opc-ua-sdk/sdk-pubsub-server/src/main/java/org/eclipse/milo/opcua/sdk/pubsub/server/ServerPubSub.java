@@ -496,14 +496,27 @@ public final class ServerPubSub implements AutoCloseable {
    *     rebuilt in that case (no change was applied).
    */
   public ReconfigureResult reconfigure(PubSubConfig newConfig, PubSubService.ReconfigureMode mode) {
+    if (remoteConfigurationServer != null) {
+      // run the engine apply, the information-model rebuild, and the remote-config base adoption
+      // (its read snapshot, VersionTime and CloseAndUpdate base) atomically under the same monitor
+      // a client CloseAndUpdate holds: otherwise the two entry points can reorder their fragment
+      // rebuilds relative to their engine reconfigures and leave the read-only information model
+      // permanently desynced from the engine
+      return remoteConfigurationServer.reconfigureUnderLock(
+          newConfig,
+          mode,
+          applied -> {
+            if (fragment != null) {
+              fragment.onConfigurationApplied(applied);
+            }
+          });
+    }
+
+    // no remote-configuration surface exists, so there is no concurrent CloseAndUpdate to serialize
+    // against; apply and rebuild directly
     ReconfigureResult result = service.reconfigure(newConfig, mode);
     if (fragment != null) {
       fragment.onConfigurationApplied(newConfig);
-    }
-    if (remoteConfigurationServer != null) {
-      // keep the remote-config file model (its read snapshot, VersionTime and CloseAndUpdate
-      // base) in sync so a later CloseAndUpdate does not revert this programmatic change
-      remoteConfigurationServer.onExternalReconfigure(newConfig);
     }
     return result;
   }

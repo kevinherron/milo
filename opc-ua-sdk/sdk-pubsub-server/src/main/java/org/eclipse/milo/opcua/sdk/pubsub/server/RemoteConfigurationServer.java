@@ -23,12 +23,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.ReconfigureResult;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfigFiles;
+import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfigValidationException;
 import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupRef;
 import org.eclipse.milo.opcua.sdk.server.AddressSpaceFilter;
 import org.eclipse.milo.opcua.sdk.server.Lifecycle;
@@ -53,6 +55,7 @@ import org.eclipse.milo.opcua.stack.core.NamespaceTable;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.UaRuntimeException;
 import org.eclipse.milo.opcua.stack.core.encoding.EncodingContext;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
@@ -414,7 +417,16 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
     return session;
   }
 
-  private void reserveIds(
+  /**
+   * Synchronized on the same monitor as {@link #closeAndUpdate}: a {@code ReserveIds} call must not
+   * interleave with a CloseAndUpdate's id auto-assignment. CloseAndUpdate snapshots the outstanding
+   * reservations, then hands that snapshot to the {@link RemoteConfigurationApplier} to draw
+   * ElementAdd ids from the {@code 0x8000-0xFFFF} range; without this lock a concurrent {@code
+   * ReserveIds} from another session could grant an id the applier is about to auto-assign (the
+   * snapshot is taken and released before {@code apply()}), violating the Part 14 §9.1.3.7.5
+   * guarantee that uniqueness spans the live configuration and all outstanding reservations.
+   */
+  private synchronized void reserveIds(
       InvocationContext context,
       String transportProfileUri,
       UShort numWriterGroupIds,
@@ -489,41 +501,55 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
 
     boolean applied = false;
     if (apply) {
-      // whole-config validity (id uniqueness, publisher ids, ...) is enforced here; a failure
-      // surfaces as the method-level status and leaves the live configuration unchanged
-      PubSubConfig newConfig = PubSubConfig.fromDataType(result.candidate(), namespaceTable);
-      ReconfigureResult reconfigureResult =
-          service.reconfigure(newConfig, PubSubService.ReconfigureMode.DISABLE_AFFECTED);
-
-      currentConfig = newConfig;
-      currentVersionTime = versionTime;
-      applied = true;
-
-      // pin R7 / §6.2.12.2: a SecurityGroup whose SecurityPolicyUri or KeyLifetime changed has all
-      // its existing keys invalidated. The reconfigure above already restarted the referencing
-      // groups (which re-register and re-fetch), but a SecurityGroup shared by more than one
-      // still-running group would keep its stale key window alive through the surviving
-      // registration; invalidate the key manager's state explicitly so the drop is guaranteed.
-      for (SecurityGroupRef ref :
-          securityGroupsToInvalidate(
-              currentDataType.getSecurityGroups(), result.candidate().getSecurityGroups())) {
-        service.invalidateSecurityKeys(ref);
-      }
-
-      reserveIdRegistry.releaseUsed(session.getSessionId(), result.candidate());
-      persist(newConfig);
-      setNs0Value(NodeIds.PublishSubscribe_ConfigurationVersion, new Variant(versionTime));
-      setNs0Value(
-          NodeIds.PublishSubscribe_PubSubConfiguration_Size,
-          new Variant(ulong(materializeCurrentBytes().length)));
-      if (lastModifiedTimeNode != null) {
-        lastModifiedTimeNode.setValue(new DataValue(new Variant(DateTime.now())));
-      }
-
       try {
-        reconfigureListener.onReconfigured(newConfig, reconfigureResult);
-      } catch (Exception e) {
-        LOGGER.warn("reconfigure listener failed", e);
+        // whole-config validity (id uniqueness across the publisher-id scope, resolvable
+        // PublishedDataSet/SecurityGroup links, publisher ids, ...) is enforced here — the per-ref
+        // applier only checks name uniqueness within the immediate list, so a candidate can pass
+        // every per-ref check yet fail this pass. Per §9.1.3.7.6 a whole-config failure is reported
+        // as ChangesApplied=false with the already-computed full-length ReferencesResults (NOT a
+        // method-level Bad with empty output arguments); the live configuration is left unchanged.
+        PubSubConfig newConfig = PubSubConfig.fromDataType(result.candidate(), namespaceTable);
+        ReconfigureResult reconfigureResult =
+            service.reconfigure(newConfig, PubSubService.ReconfigureMode.DISABLE_AFFECTED);
+
+        currentConfig = newConfig;
+        currentVersionTime = versionTime;
+        applied = true;
+
+        // pin R7 / §6.2.12.2: a SecurityGroup whose SecurityPolicyUri or KeyLifetime changed has
+        // all its existing keys invalidated. The reconfigure above already restarted the
+        // referencing groups (which re-register and re-fetch), but a SecurityGroup shared by more
+        // than one still-running group would keep its stale key window alive through the surviving
+        // registration; invalidate the key manager's state explicitly so the drop is guaranteed.
+        for (SecurityGroupRef ref :
+            securityGroupsToInvalidate(
+                currentDataType.getSecurityGroups(), result.candidate().getSecurityGroups())) {
+          service.invalidateSecurityKeys(ref);
+        }
+
+        reserveIdRegistry.releaseUsed(session.getSessionId(), result.candidate());
+        persist(newConfig);
+        setNs0Value(NodeIds.PublishSubscribe_ConfigurationVersion, new Variant(versionTime));
+        setNs0Value(
+            NodeIds.PublishSubscribe_PubSubConfiguration_Size,
+            new Variant(ulong(materializeCurrentBytes().length)));
+        if (lastModifiedTimeNode != null) {
+          lastModifiedTimeNode.setValue(new DataValue(new Variant(DateTime.now())));
+        }
+
+        try {
+          reconfigureListener.onReconfigured(newConfig, reconfigureResult);
+        } catch (Exception e) {
+          LOGGER.warn("reconfigure listener failed", e);
+        }
+      } catch (PubSubConfigValidationException | UaRuntimeException e) {
+        // the candidate failed whole-config validation (fromDataType) or engine reconfigure
+        // validation: leave applied=false and fall through to report the full-length per-ref
+        // results the client is owed; nothing above mutated the live configuration before the
+        // throw (service.reconfigure validates before applying, and currentConfig is set only
+        // after it returns)
+        LOGGER.warn(
+            "CloseAndUpdate whole-config validation failed; configuration left unchanged", e);
       }
     }
 
@@ -574,6 +600,40 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
     if (lastModifiedTimeNode != null) {
       lastModifiedTimeNode.setValue(new DataValue(new Variant(DateTime.now())));
     }
+  }
+
+  /**
+   * Run a programmatic {@link ServerPubSub#reconfigure} atomically against {@link #closeAndUpdate}:
+   * apply {@code newConfig} to the engine, rebuild the information-model fragment ({@code
+   * rebuildInfoModel}), and adopt the new base ({@link #onExternalReconfigure}) — all under the
+   * same monitor CloseAndUpdate holds.
+   *
+   * <p>The engine reconfigure is serialized by the engine lock and the fragment rebuild by the
+   * fragment's own lock, but the two orders are independent: without spanning both under one
+   * monitor shared with CloseAndUpdate, a concurrent client CloseAndUpdate could apply its config
+   * to the engine and then have its fragment rebuild reordered after this call's rebuild, leaving
+   * the read-only information model permanently desynced from the engine (every later reconcile
+   * then diffs against the wrong baseline). Holding this monitor across engine-apply and
+   * model-rebuild makes the fragment rebuild order track the engine reconfigure order across both
+   * entry points.
+   *
+   * @param newConfig the new {@link PubSubConfig}.
+   * @param mode the {@link PubSubService.ReconfigureMode} governing how affected components
+   *     restart.
+   * @param rebuildInfoModel rebuilds the exposed information model for the applied config; runs
+   *     after the engine apply and before the base is adopted, and only if the engine apply
+   *     succeeds.
+   * @return the {@link ReconfigureResult} from the engine reconfigure.
+   */
+  synchronized ReconfigureResult reconfigureUnderLock(
+      PubSubConfig newConfig,
+      PubSubService.ReconfigureMode mode,
+      Consumer<PubSubConfig> rebuildInfoModel) {
+
+    ReconfigureResult result = service.reconfigure(newConfig, mode);
+    rebuildInfoModel.accept(newConfig);
+    onExternalReconfigure(newConfig);
+    return result;
   }
 
   /** Persist the applied configuration (pin R8); a failure is logged and retried next mutation. */

@@ -11,6 +11,7 @@
 package org.eclipse.milo.opcua.sdk.pubsub.server;
 
 import static org.eclipse.milo.opcua.sdk.pubsub.server.RemoteConfigClientSupport.CLOSE_AND_UPDATE;
+import static org.eclipse.milo.opcua.sdk.pubsub.server.RemoteConfigClientSupport.RESERVE_IDS;
 import static org.eclipse.milo.opcua.sdk.pubsub.server.RemoteConfigClientSupport.TIMEOUT;
 import static org.eclipse.milo.opcua.sdk.pubsub.server.RemoteConfigClientSupport.WRITE;
 import static org.eclipse.milo.opcua.sdk.pubsub.server.RemoteConfigClientSupport.call;
@@ -22,13 +23,20 @@ import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfigFiles;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
@@ -41,6 +49,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.DataSetOrderingType;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
+import org.eclipse.milo.opcua.stack.core.types.structured.CallMethodResult;
 import org.eclipse.milo.opcua.stack.core.types.structured.DatagramConnectionTransportDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.DatagramWriterGroupTransportDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.NetworkAddressUrlDataType;
@@ -489,6 +498,151 @@ class CloseAndUpdateClientCallTest {
     }
   }
 
+  @Test
+  void wholeConfigValidationFailureReturnsFullResultsWithoutApplying() throws Exception {
+    try (ServerPubSub serverPubSub = attach(configWithConnection("host"), null)) {
+      OpcUaClient client = connect(sks);
+      try {
+        // two writer groups added under "host" with distinct names but a colliding explicit
+        // WriterGroupId: each passes the per-ref name-uniqueness check (Good), but the candidate
+        // fails whole-config validation (duplicate WriterGroupId within a connection)
+        var file =
+            config(
+                connection(
+                    "host",
+                    writerGroupWithGroupHeader("wg-a", 0x1234),
+                    writerGroupWithGroupHeader("wg-b", 0x1234)));
+        var refs =
+            new PubSubConfigurationRefDataType[] {
+              ref(mask(Field.ElementAdd, Field.ReferenceWriterGroup), 0, 0, 0),
+              ref(mask(Field.ElementAdd, Field.ReferenceWriterGroup), 0, 1, 0)
+            };
+        var result = closeAndUpdate(client, file, true, refs);
+
+        // §9.1.3.7.6: a whole-config validation failure at apply is reported as
+        // ChangesApplied=false
+        // with the full-length (both-Good) ReferencesResults, NOT a method-level Bad with empty
+        // output arguments
+        assertTrue(result.getStatusCode().isGood(), result.toString());
+        assertEquals(Boolean.FALSE, result.getOutputArguments()[0].getValue());
+        assertEquals(2, referencesResults(result).length);
+        assertTrue(referencesResults(result)[0].isGood());
+        assertTrue(referencesResults(result)[1].isGood());
+        // the live configuration is unchanged: no writer group was added to "host"
+        assertTrue(serverPubSub.runtime().components().connection("host").isPresent());
+      } finally {
+        client.disconnect();
+      }
+    }
+  }
+
+  @Test
+  void programmaticReconfigureIsSerializedAgainstCloseAndUpdate() throws Exception {
+    var store = new BlockingStore();
+    ExecutorService updater = Executors.newSingleThreadExecutor();
+    ExecutorService reconfigurer = Executors.newSingleThreadExecutor();
+    try (ServerPubSub serverPubSub = attach(PubSubConfig.builder().build(), store)) {
+      OpcUaClient client = connect(sks);
+      try {
+        // a client CloseAndUpdate that adds connection "cau" and then parks inside closeAndUpdate's
+        // persist() (BlockingStore.save) while still holding the reconfigure monitor
+        Future<CallMethodResult> closeAndUpdateTask =
+            updater.submit(
+                () ->
+                    closeAndUpdate(
+                        client,
+                        config(connection("cau")),
+                        true,
+                        ref(mask(Field.ElementAdd, Field.ReferenceConnection), 0, 0, 0)));
+
+        assertTrue(store.saveEntered.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+
+        // a programmatic reconfigure that would REPLACE "cau" with "prog"
+        var progConfig = PubSubConfig.fromDataType(config(connection("prog")), nsTable());
+        var startedReconfigure = new CountDownLatch(1);
+        Future<?> reconfigureTask =
+            reconfigurer.submit(
+                () -> {
+                  startedReconfigure.countDown();
+                  serverPubSub.reconfigure(
+                      progConfig, PubSubService.ReconfigureMode.DISABLE_AFFECTED);
+                });
+        try {
+          assertTrue(startedReconfigure.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+
+          // the reconfigure shares the monitor the parked CloseAndUpdate holds, so it cannot
+          // complete...
+          assertThrows(TimeoutException.class, () -> reconfigureTask.get(1, TimeUnit.SECONDS));
+
+          // ...and its ENGINE apply has not run either: the whole reconfigure (engine apply +
+          // fragment rebuild + base adoption) is inside the excluded region, so the live config
+          // still reflects the parked CloseAndUpdate's "cau" and not the reconfigure's "prog"
+          assertTrue(serverPubSub.runtime().components().connection("cau").isPresent());
+          assertTrue(serverPubSub.runtime().components().connection("prog").isEmpty());
+        } finally {
+          store.releaseSave.countDown();
+        }
+
+        reconfigureTask.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        closeAndUpdateTask.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+
+        // once both complete, the programmatic reconfigure ran last and won for the engine
+        assertTrue(serverPubSub.runtime().components().connection("prog").isPresent());
+        assertTrue(serverPubSub.runtime().components().connection("cau").isEmpty());
+      } finally {
+        client.disconnect();
+      }
+    } finally {
+      updater.shutdownNow();
+      reconfigurer.shutdownNow();
+    }
+  }
+
+  @Test
+  void reserveIdsIsSerializedAgainstCloseAndUpdate() throws Exception {
+    var store = new BlockingStore();
+    ExecutorService updaterExecutor = Executors.newSingleThreadExecutor();
+    ExecutorService reserverExecutor = Executors.newSingleThreadExecutor();
+    try (ServerPubSub ignored = attach(PubSubConfig.builder().build(), store)) {
+      OpcUaClient updater = connect(sks);
+      OpcUaClient reserver = connect(sks);
+      try {
+        Future<CallMethodResult> closeAndUpdateTask =
+            updaterExecutor.submit(
+                () ->
+                    closeAndUpdate(
+                        updater,
+                        config(connection("cau")),
+                        true,
+                        ref(mask(Field.ElementAdd, Field.ReferenceConnection), 0, 0, 0)));
+
+        assertTrue(store.saveEntered.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS));
+
+        // a concurrent ReserveIds from another session must not run its id allocation while the
+        // CloseAndUpdate is parked holding the reconfigure monitor: otherwise it could grant an id
+        // the CloseAndUpdate applier is about to auto-assign from the same snapshot (§9.1.3.7.5)
+        Future<CallMethodResult> reserveTask = reserverExecutor.submit(() -> reserveIds(reserver));
+        try {
+          assertThrows(TimeoutException.class, () -> reserveTask.get(1, TimeUnit.SECONDS));
+        } finally {
+          store.releaseSave.countDown();
+        }
+
+        closeAndUpdateTask.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+
+        // once the CloseAndUpdate releases the monitor, the ReserveIds completes
+        CallMethodResult reserveResult = reserveTask.get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        assertTrue(reserveResult.getStatusCode().isGood(), reserveResult.toString());
+      } finally {
+        reserver.disconnect();
+        updater.disconnect();
+      }
+    } finally {
+      updaterExecutor.shutdownNow();
+      reserverExecutor.shutdownNow();
+    }
+  }
+
   // endregion
 
   // region fixtures / helpers
@@ -654,6 +808,16 @@ class CloseAndUpdateClientCallTest {
     return PubSubConfig.fromDataType(config(connection(name)), nsTable());
   }
 
+  /** A client {@code ReserveIds} call over the UDP/UADP transport profile. */
+  private static CallMethodResult reserveIds(OpcUaClient client) throws Exception {
+    return call(
+        client,
+        RESERVE_IDS,
+        new Variant("http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp"),
+        new Variant(ushort(4)),
+        new Variant(ushort(0)));
+  }
+
   /** An in-memory {@link PubSubConfigurationStore} counting every {@code save()}. */
   private static final class CountingStore implements PubSubConfigurationStore {
     final List<PubSubConfiguration2DataType> saved = new CopyOnWriteArrayList<>();
@@ -666,6 +830,49 @@ class CloseAndUpdateClientCallTest {
     @Override
     public void save(PubSubConfiguration2DataType value) {
       saved.add(value);
+    }
+  }
+
+  /**
+   * A store whose {@code save()} parks (once it first sees the mutating configuration carrying the
+   * {@code "cau"} connection) until {@link #releaseSave} is counted down, so a client
+   * CloseAndUpdate can be held inside {@link RemoteConfigurationServer#closeAndUpdate} while it
+   * still owns the reconfigure monitor. The empty attach-time save (no {@code "cau"} connection) is
+   * not parked.
+   */
+  private static final class BlockingStore implements PubSubConfigurationStore {
+    final CountDownLatch saveEntered = new CountDownLatch(1);
+    final CountDownLatch releaseSave = new CountDownLatch(1);
+
+    @Override
+    public PubSubConfiguration2DataType load() {
+      return null;
+    }
+
+    @Override
+    public void save(PubSubConfiguration2DataType value) {
+      if (!carriesConnection(value, "cau")) {
+        return;
+      }
+      saveEntered.countDown();
+      try {
+        releaseSave.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    }
+
+    private static boolean carriesConnection(PubSubConfiguration2DataType value, String name) {
+      PubSubConnectionDataType[] connections = value.getConnections();
+      if (connections == null) {
+        return false;
+      }
+      for (PubSubConnectionDataType connection : connections) {
+        if (connection != null && name.equals(connection.getName())) {
+          return true;
+        }
+      }
+      return false;
     }
   }
 
