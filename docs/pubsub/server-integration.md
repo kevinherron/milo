@@ -361,8 +361,12 @@ What you get, and the edges:
   browsing client sees readers go `Operational` and components go `Disabled` as it happens.
 - `SupportedTransportProfiles` advertises the UDP-UADP profile only, matching what the server
   integration actually runs.
-- The ns0 method nodes (`AddConnection`, `RemoveConnection`, the SKS — Security Key Service —
-  methods) are left unbacked; a client calling them gets `Bad_NotImplemented`.
+- The ns0 configuration method nodes (`AddConnection`, `RemoveConnection`, the SKS — Security Key
+  Service — management methods) are left unbacked; a client calling them gets
+  `Bad_NotImplemented`. The exception is `GetSecurityKeys`, which is backed when the opt-in SKS
+  server face is enabled (`ServerPubSubOptions.sksServerEnabled(true)`; it requires a
+  SignAndEncrypt channel and enforces per-SecurityGroup RolePermissions — see
+  [limitations: message security and SKS](limitations-and-interop.md#message-security-and-sks)).
 
 ## Persisting configuration
 

@@ -109,14 +109,16 @@ covers:
   `ConfiguredSize` (see [key frames and delta frames](#key-frames-and-delta-frames-keyframecount))
 
 `Bad_NotSupported` is reserved for features that are recognized but not implemented in this
-release: any enabled group whose `MessageSecurityConfig` mode is anything other than `None`,
-MQTT-over-WebSocket broker URIs, and — on UADP-mapped writer groups — the `PromotedFields`
-network-message mask bit and the `RawData` field-content mask bit of enabled writers (see
-[field encoding](#field-encoding-datasetfieldcontentmask)). Disabled components with these
-settings are tolerated so that configs can round-trip; a component that is enabled later instead
-fails into PubSubState Error with the same code at activation. The UADP mask checks apply only
-when the `"uadp"` mapping resolves to the built-in provider — a custom provider registered under
-that name owns its wire format and is never second-guessed.
+release: MQTT-over-WebSocket broker URIs, and — on UADP-mapped writer groups — the
+`PromotedFields` network-message mask bit and the `RawData` field-content mask bit of enabled
+writers (see [field encoding](#field-encoding-datasetfieldcontentmask)). Message security
+misconfiguration (a secured group without a resolvable `SecurityGroupRef`, a supported policy, or
+a bound `SecurityKeyProvider`, or any secured JSON-mapped component) is a `Bad_ConfigurationError`
+like the other configuration rows. Disabled components with these settings are tolerated so that
+configs can round-trip; a component that is enabled later instead fails into PubSubState Error
+with the same code at activation. The UADP mask checks apply only when the `"uadp"` mapping
+resolves to the built-in provider — a custom provider registered under that name owns its wire
+format and is never second-guessed.
 
 At reconfigure time, `reconfigure(...)` and `update(...)` run the same startup checks before
 applying anything. Failures throw an unchecked `UaRuntimeException` with `Bad_ConfigurationError`
@@ -484,17 +486,20 @@ into one of two camps: rejected (you get an error) or inert (silently ignored). 
 | Knob | Behavior today |
 | --- | --- |
 | `DataSetReaderConfig.keyFrameCount` | Inert. Round-trip only; the reader never consults the expected cadence — frame classification and the key-frame startup gate work from message content alone. |
-| `MessageSecurityConfig` with mode `Sign` or `SignAndEncrypt` | Rejected. `startup()` fails with `Bad_NotSupported` for any enabled group; disabled groups are tolerated for round-trip. |
 | UADP `PromotedFields` network-message mask bit / `RawData` field-content mask bit | Rejected. `startup()` and reconfigure fail with `Bad_NotSupported` for enabled UADP-mapped groups and writers; components enabled later fail into Error at activation. Disabled components are tolerated for round-trip; JSON `RawData` is implemented; custom `"uadp"` providers are exempt. |
-| `SecurityKeyProvider` / `SecurityGroupConfig` (SKS) | Inert. Providers are accepted but never invoked; the one non-silent edge is that binding a provider to an unknown security group name throws `IllegalArgumentException` at create time. |
 | UADP timing offsets (`SamplingOffset`, `PublishingOffset`, `ReceiveOffset`, `ProcessingOffset`) | Inert. No typed config fields exist; imported values are preserved in `rawMessageSettings` and never consulted by the publish or receive paths. |
 | `BrokerTransportSettings.resourceUri` / `authenticationProfileUri` | Inert. Round-trip only; never read by the runtime. |
 | Writer-level `BrokerTransportSettings` QoS without a `queueName` override | Inert for data messages — the writer stays in the group's shared partition. Writer QoS is honored when combined with a queue override. |
 
-Two former entries have graduated out of this list: `DataSetWriterConfig.keyFrameCount` is honored
-now (see [key frames and delta frames](#key-frames-and-delta-frames-keyframecount)) and
+Former entries that have graduated out of this list: `DataSetWriterConfig.keyFrameCount` is
+honored now (see [key frames and delta frames](#key-frames-and-delta-frames-keyframecount)),
 `maxNetworkMessageSize` is enforced on both group kinds (see
-[size budgets](#networkmessage-size-budgets-maxnetworkmessagesize)).
+[size budgets](#networkmessage-size-budgets-maxnetworkmessagesize)), and message security runs:
+`MessageSecurityConfig` with mode `Sign`/`SignAndEncrypt` is honored on UADP-mapped components and
+`SecurityKeyProvider`/`SecurityGroupConfig` drive the runtime key manager — a secured component
+needs a resolvable `SecurityGroupRef`, a supported policy, and a provider bound via
+`PubSubBindings`, else `Bad_ConfigurationError` (see
+[limitations: message security and SKS](limitations-and-interop.md#message-security-and-sks)).
 
 See [limitations](limitations-and-interop.md) for the full picture of what is and is not
 implemented, including the receive-side behavior for features that are emit-rejected here.
