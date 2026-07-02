@@ -11,8 +11,12 @@
 package org.eclipse.milo.opcua.sdk.pubsub.server;
 
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.uint;
+import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
 
+import java.net.InetAddress;
+import java.net.URI;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -25,11 +29,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.core.nodes.VariableNode;
 import org.eclipse.milo.opcua.sdk.pubsub.ComponentType;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubDiagnostics;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubDiagnostics.ComponentDiagnostics;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubDiagnostics.Counter;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubHandle;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
@@ -43,10 +51,18 @@ import org.eclipse.milo.opcua.sdk.server.SimpleAddressSpaceFilter;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
 import org.eclipse.milo.opcua.sdk.server.methods.AbstractMethodInvocationHandler.InvocationContext;
+import org.eclipse.milo.opcua.sdk.server.methods.MethodInvocationHandler;
+import org.eclipse.milo.opcua.sdk.server.model.objects.BaseObjectTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.DataSetReaderTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.DataSetWriterTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.NetworkAddressUrlTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubConnectionTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsConnectionTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsDataSetReaderTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsDataSetWriterTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsReaderGroupTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsType;
+import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubDiagnosticsWriterGroupTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubStatusType;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PubSubStatusTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.PublishSubscribeType;
@@ -60,26 +76,34 @@ import org.eclipse.milo.opcua.sdk.server.model.objects.UadpWriterGroupMessageTyp
 import org.eclipse.milo.opcua.sdk.server.model.objects.WriterGroupTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.BaseDataVariableTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.PropertyTypeNode;
+import org.eclipse.milo.opcua.sdk.server.model.variables.PubSubDiagnosticsCounterTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.variables.SelectionListTypeNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNodeContext;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaObjectNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
+import org.eclipse.milo.opcua.sdk.server.nodes.filters.AttributeFilter;
+import org.eclipse.milo.opcua.sdk.server.nodes.filters.AttributeFilters;
 import org.eclipse.milo.opcua.sdk.server.util.SubscriptionModel;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.DiagnosticsLevel;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubDiagnosticsCounterClassification;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.eclipse.milo.opcua.stack.core.types.structured.AccessRestrictionType;
+import org.eclipse.milo.opcua.stack.core.types.structured.ConfigurationVersionDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.DataSetMetaDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.DataSetReaderDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.DataSetWriterDataType;
@@ -192,6 +216,16 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private final Map<String, UaVariableNode> metaDataVariables = new ConcurrentHashMap<>();
 
   /**
+   * Last-received DataSetMessage sequence number per DataSetReader name path, backing the Optional
+   * §9.1.11.12 {@code MessageSequenceNumber} LiveValue (pin R13). An entry exists only while the
+   * reader's diagnostics node is built; it is fed from {@link PubSubService#addDataSetListener}
+   * deliveries and read at browse time. UInt16 to match Table 331 — the public event spans UInt32
+   * for the JSON mapping, so a value is truncated to its low 16 bits, matching the UADP GroupHeader
+   * width.
+   */
+  private final Map<String, UShort> lastReaderMessageSeq = new ConcurrentHashMap<>();
+
+  /**
    * Guards listener callbacks; set on startup, cleared on shutdown. Listeners cannot be removed.
    */
   private volatile boolean active = false;
@@ -208,6 +242,34 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
    * ServerPubSubOptions#isAllowRemoteConfiguration()} so the read-only exposure stays read-only.
    */
   private final boolean enableDisableSupported;
+
+  /**
+   * Whether the §9.1.11 diagnostics model is exposed (pins R13/R14/R15/R18). Gated on {@link
+   * ServerPubSubOptions#isDiagnosticsEnabled()}; when {@code false} the ns0 Diagnostics ({@code
+   * i=17409}) and PubSubCapabilities ({@code i=23678}) skeletons are left exactly as the loader
+   * created them and no per-component Diagnostics objects are minted. Diagnostics requires the
+   * information model to be exposed (this fragment only exists when {@link
+   * ServerPubSubOptions#isExposeInformationModel()}), so both flags must be set to expose it.
+   */
+  private final boolean diagnosticsEnabled;
+
+  /** Whether the server hosts the SKS pull face (pin R20 {@code SupportSecurityKeyServer}). */
+  private final boolean sksServerEnabled;
+
+  /**
+   * Cleanup actions for the ns0 diagnostics exposure — getValue-filter removals and the {@code
+   * Reset} method-handler restore — run on shutdown so the ns0 skeleton is left inert. Only touched
+   * on startup and shutdown, which {@link ServerPubSub} serializes.
+   */
+  private final List<Runnable> ns0DiagnosticsCleanup = new ArrayList<>();
+
+  /**
+   * DataSet {@code ConfigurationVersion} by PublishedDataSet name for the configuration currently
+   * being built; consulted by {@link #buildDataSetWriterNodes} to back a writer diagnostics
+   * MajorVersion/MinorVersion. Set at the start of each build pass ({@link #buildNodes} / {@link
+   * #onConfigurationApplied}), which run single-threaded.
+   */
+  private Map<String, ConfigurationVersionDataType> dataSetVersionsByName = Map.of();
 
   /**
    * Serializes {@link #onConfigurationApplied(PubSubConfig)} and guards {@link
@@ -230,6 +292,8 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     this.service = service;
     this.authorizer = options.getMethodAuthorizer();
     this.enableDisableSupported = options.isAllowRemoteConfiguration();
+    this.diagnosticsEnabled = options.isDiagnosticsEnabled();
+    this.sksServerEnabled = options.isSksServerEnabled();
 
     namespaceIndex = server.getServerNamespace().getNamespaceIndex();
 
@@ -249,12 +313,16 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
                 builtConfiguration = configuration;
                 active = true;
+                if (diagnosticsEnabled) {
+                  exposeNs0Diagnostics();
+                }
                 registerListeners();
               }
 
               @Override
               public void shutdown() {
                 active = false;
+                teardownNs0Diagnostics();
                 setRootState(PubSubState.Disabled);
               }
             });
@@ -288,6 +356,8 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   // region node construction
 
   private void buildNodes(PubSubConfiguration2DataType configuration) {
+    dataSetVersionsByName = dataSetVersions(configuration);
+
     var dataSetNodeIds = new HashMap<String, NodeId>();
 
     PublishedDataSetDataType[] publishedDataSets =
@@ -400,6 +470,14 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     addStatusNodes(node, name, () -> service.components().connection(name));
 
+    if (diagnosticsEnabled) {
+      BaseObjectTypeNode liveValues =
+          buildComponentDiagnostics(node, name, DiagnosticsKind.CONNECTION);
+      // ResolvedAddress (pin R15): best-effort at exposure time; a documented approximation
+      addVariableNode(
+          liveValues, "ResolvedAddress", NodeIds.String, new Variant(resolveAddress(connection)));
+    }
+
     WriterGroupDataType[] writerGroups =
         orEmpty(connection.getWriterGroups(), WriterGroupDataType[]::new);
 
@@ -503,6 +581,15 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     addStatusNodes(node, path, () -> service.components().writerGroup(connectionName, name));
 
+    if (diagnosticsEnabled) {
+      BaseObjectTypeNode liveValues =
+          buildComponentDiagnostics(node, path, DiagnosticsKind.WRITER_GROUP);
+      addCountLiveValue(
+          liveValues, "ConfiguredDataSetWriters", () -> writerCounts(connectionName, name)[0]);
+      addCountLiveValue(
+          liveValues, "OperationalDataSetWriters", () -> writerCounts(connectionName, name)[1]);
+    }
+
     if (group.getMessageSettings() instanceof UadpWriterGroupMessageDataType uadp) {
       UadpWriterGroupMessageTypeNode messageSettings =
           addObjectNode(
@@ -602,6 +689,13 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     addStatusNodes(
         node, path, () -> service.components().dataSetWriter(connectionName, groupName, name));
 
+    if (diagnosticsEnabled) {
+      BaseObjectTypeNode liveValues =
+          buildComponentDiagnostics(node, path, DiagnosticsKind.DATA_SET_WRITER);
+      // MajorVersion/MinorVersion (Optional/Info) from the referenced PublishedDataSet's version
+      addDataSetVersionLiveValues(liveValues, dataSetVersionsByName.get(writer.getDataSetName()));
+    }
+
     if (writer.getMessageSettings() instanceof UadpDataSetWriterMessageDataType uadp) {
       UadpDataSetWriterMessageTypeNode messageSettings =
           addObjectNode(
@@ -675,6 +769,15 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     addGroupPropertyNodes(node, group);
 
     addStatusNodes(node, path, () -> service.components().readerGroup(connectionName, name));
+
+    if (diagnosticsEnabled) {
+      BaseObjectTypeNode liveValues =
+          buildComponentDiagnostics(node, path, DiagnosticsKind.READER_GROUP);
+      addCountLiveValue(
+          liveValues, "ConfiguredDataSetReaders", () -> readerCounts(connectionName, name)[0]);
+      addCountLiveValue(
+          liveValues, "OperationalDataSetReaders", () -> readerCounts(connectionName, name)[1]);
+    }
 
     DataSetReaderDataType[] readers =
         orEmpty(group.getDataSetReaders(), DataSetReaderDataType[]::new);
@@ -801,6 +904,17 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
     addStatusNodes(
         node, path, () -> service.components().dataSetReader(connectionName, groupName, name));
+
+    if (diagnosticsEnabled) {
+      BaseObjectTypeNode liveValues =
+          buildComponentDiagnostics(node, path, DiagnosticsKind.DATA_SET_READER);
+      DataSetMetaDataType readerMetaData = reader.getDataSetMetaData();
+      addDataSetVersionLiveValues(
+          liveValues, readerMetaData != null ? readerMetaData.getConfigurationVersion() : null);
+      // seed tracking so the DataSetListener updates this reader; reads 0 until a DataSet arrives
+      lastReaderMessageSeq.putIfAbsent(path, ushort(0));
+      addMessageSequenceNumberLiveValue(liveValues, path);
+    }
 
     if (reader.getMessageSettings() instanceof UadpDataSetReaderMessageDataType uadp) {
       buildReaderMessageSettingsNodes(node, nodeId, uadp);
@@ -1410,6 +1524,21 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
             metaDataNode.setValue(new DataValue(new Variant(event.metaData())));
           }
         });
+
+    service.addDataSetListener(
+        event -> {
+          if (!active) {
+            return;
+          }
+
+          UInteger seq = event.dataSetMessageSequenceNumber();
+          if (seq != null) {
+            // computeIfPresent only tracks readers whose diagnostics node is currently built
+            // (seeded in buildDataSetReaderNodes, purged with the subtree on rebuild)
+            lastReaderMessageSeq.computeIfPresent(
+                event.reader().path(), (path, previous) -> ushort(seq.intValue() & 0xFFFF));
+          }
+        });
   }
 
   // endregion
@@ -1439,6 +1568,8 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
       PubSubConfiguration2DataType applied =
           appliedConfig.toDataType(getServer().getNamespaceTable());
+
+      dataSetVersionsByName = dataSetVersions(applied);
 
       Set<String> changedDataSets = reconcilePublishedDataSets(previous, applied);
 
@@ -1568,6 +1699,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private void purgeTracking(String path) {
     stateVariables.keySet().removeIf(key -> key.equals(path) || key.startsWith(path + "/"));
     metaDataVariables.keySet().removeIf(key -> key.equals(path) || key.startsWith(path + "/"));
+    lastReaderMessageSeq.keySet().removeIf(key -> key.equals(path) || key.startsWith(path + "/"));
   }
 
   /** Refresh the ns0 root ConfigurationProperties and Status/State after a reconfigure. */
@@ -1635,6 +1767,783 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private static UInteger versionTimeNow() {
     long seconds = Instant.now().getEpochSecond() - VERSION_TIME_EPOCH.getEpochSecond();
     return uint(seconds & 0xFFFFFFFFL);
+  }
+
+  // endregion
+
+  // region diagnostics exposure (pins R13/R14/R15/R18/R20)
+
+  private static final PubSubDiagnosticsCounterClassification INFO =
+      PubSubDiagnosticsCounterClassification.Information;
+  private static final PubSubDiagnosticsCounterClassification ERR =
+      PubSubDiagnosticsCounterClassification.Error;
+
+  /** The Part 14 §9.1.11 diagnostics object kind minted for a component, with its type node id. */
+  private enum DiagnosticsKind {
+    CONNECTION(NodeIds.PubSubDiagnosticsConnectionType),
+    WRITER_GROUP(NodeIds.PubSubDiagnosticsWriterGroupType),
+    READER_GROUP(NodeIds.PubSubDiagnosticsReaderGroupType),
+    DATA_SET_WRITER(NodeIds.PubSubDiagnosticsDataSetWriterType),
+    DATA_SET_READER(NodeIds.PubSubDiagnosticsDataSetReaderType);
+
+    private final NodeId typeDefinition;
+
+    DiagnosticsKind(NodeId typeDefinition) {
+      this.typeDefinition = typeDefinition;
+    }
+  }
+
+  /** One diagnostics counter exposed under a Counters folder: BrowseName, engine counter, class. */
+  private record CounterSpec(
+      String browseName, Counter counter, PubSubDiagnosticsCounterClassification classification) {}
+
+  /** The six Part 14 Table 311 State* counters present on every diagnostics object. */
+  private static final List<CounterSpec> STATE_COUNTERS =
+      List.of(
+          new CounterSpec("StateError", Counter.STATE_ERROR, ERR),
+          new CounterSpec("StateOperationalByMethod", Counter.STATE_OPERATIONAL_BY_METHOD, INFO),
+          new CounterSpec("StateOperationalByParent", Counter.STATE_OPERATIONAL_BY_PARENT, INFO),
+          new CounterSpec("StateOperationalFromError", Counter.STATE_OPERATIONAL_FROM_ERROR, INFO),
+          new CounterSpec("StatePausedByParent", Counter.STATE_PAUSED_BY_PARENT, INFO),
+          new CounterSpec("StateDisabledByMethod", Counter.STATE_DISABLED_BY_METHOD, INFO));
+
+  /** Engine counters classified Error; used for the {@code SubError} descendant roll-up. */
+  private static final Set<Counter> ERROR_COUNTERS =
+      Set.of(
+          Counter.STATE_ERROR,
+          Counter.FAILED_TRANSMISSIONS,
+          Counter.ENCRYPTION_ERRORS,
+          Counter.DECRYPTION_ERRORS,
+          Counter.FAILED_DATA_SET_MESSAGES,
+          Counter.DECODE_ERRORS);
+
+  /** The ns0 PubSubCapabilities {@code Max*} property nodes (pin R20; all advertised as 0). */
+  private static final List<NodeId> CAPABILITY_MAX_NODES =
+      List.of(
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxPubSubConnections,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxWriterGroups,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxReaderGroups,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxDataSetWriters,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxDataSetReaders,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxFieldsPerDataSet,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxDataSetWritersPerGroup,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxSecurityGroups,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxPushTargets,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxPublishedDataSets,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxStandaloneSubscribedDataSets,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxNetworkMessageSizeDatagram,
+          NodeIds.PublishSubscribe_PubSubCapablities_MaxNetworkMessageSizeBroker);
+
+  /** The counters exposed on a diagnostics object of {@code kind} (pin R13/R14). */
+  private static List<CounterSpec> countersFor(DiagnosticsKind kind) {
+    var specs = new ArrayList<>(STATE_COUNTERS);
+    switch (kind) {
+      case WRITER_GROUP -> {
+        specs.add(new CounterSpec("SentNetworkMessages", Counter.NETWORK_MESSAGES_SENT, INFO));
+        specs.add(new CounterSpec("FailedTransmissions", Counter.FAILED_TRANSMISSIONS, ERR));
+        specs.add(new CounterSpec("EncryptionErrors", Counter.ENCRYPTION_ERRORS, ERR));
+      }
+      case READER_GROUP -> {
+        specs.add(
+            new CounterSpec("ReceivedNetworkMessages", Counter.NETWORK_MESSAGES_RECEIVED, INFO));
+        specs.add(new CounterSpec("DecryptionErrors", Counter.DECRYPTION_ERRORS, ERR));
+      }
+      case DATA_SET_WRITER ->
+          specs.add(
+              new CounterSpec("FailedDataSetMessages", Counter.FAILED_DATA_SET_MESSAGES, ERR));
+      case DATA_SET_READER ->
+          // reader-side FailedDataSetMessages is fed by the engine's decodeErrors (§9.1.11.12);
+          // DecryptionErrors is charged to the ReaderGroup/connection, not the reader, so omit it
+          specs.add(new CounterSpec("FailedDataSetMessages", Counter.DECODE_ERRORS, ERR));
+      case CONNECTION -> {
+        // §9.1.11.8 adds no counters beyond the inherited six
+      }
+    }
+    return specs;
+  }
+
+  /**
+   * Mint the per-component {@code Diagnostics} object (pin R18) under {@code componentNode}: its
+   * read-only Basic {@code DiagnosticsLevel}, the {@code TotalInformation}/{@code TotalError} sums
+   * of this object's own counters, the {@code SubError} descendant roll-up, the {@code Reset}
+   * method, and the {@code Counters} folder for {@code kind}. Counter values, Total*, and SubError
+   * are computed at read time from the live {@link PubSubDiagnostics} snapshot with a fresh
+   * SourceTimestamp, and UInt32-clamped (§9.1.11.5). Returns the (empty) {@code LiveValues} folder
+   * so the caller can add the kind-specific live values.
+   */
+  private BaseObjectTypeNode buildComponentDiagnostics(
+      UaNode componentNode, String path, DiagnosticsKind kind) {
+
+    NodeId diagnosticsId = childNodeId(componentNode, "Diagnostics");
+    QualifiedName browseName = new QualifiedName(0, "Diagnostics");
+    NodeId parentId = componentNode.getNodeId();
+
+    UaObjectNode diagnostics =
+        switch (kind) {
+          case CONNECTION ->
+              addObjectNode(
+                  PubSubDiagnosticsConnectionTypeNode::new,
+                  diagnosticsId,
+                  browseName,
+                  kind.typeDefinition,
+                  NodeIds.HasComponent,
+                  parentId);
+          case WRITER_GROUP ->
+              addObjectNode(
+                  PubSubDiagnosticsWriterGroupTypeNode::new,
+                  diagnosticsId,
+                  browseName,
+                  kind.typeDefinition,
+                  NodeIds.HasComponent,
+                  parentId);
+          case READER_GROUP ->
+              addObjectNode(
+                  PubSubDiagnosticsReaderGroupTypeNode::new,
+                  diagnosticsId,
+                  browseName,
+                  kind.typeDefinition,
+                  NodeIds.HasComponent,
+                  parentId);
+          case DATA_SET_WRITER ->
+              addObjectNode(
+                  PubSubDiagnosticsDataSetWriterTypeNode::new,
+                  diagnosticsId,
+                  browseName,
+                  kind.typeDefinition,
+                  NodeIds.HasComponent,
+                  parentId);
+          case DATA_SET_READER ->
+              addObjectNode(
+                  PubSubDiagnosticsDataSetReaderTypeNode::new,
+                  diagnosticsId,
+                  browseName,
+                  kind.typeDefinition,
+                  NodeIds.HasComponent,
+                  parentId);
+        };
+
+    // read-only Basic level; no level switching/activation machinery (pin R13)
+    addVariableNode(
+        diagnostics,
+        "DiagnosticsLevel",
+        NodeIds.DiagnosticsLevel,
+        new Variant(DiagnosticsLevel.Basic));
+
+    List<CounterSpec> specs = countersFor(kind);
+
+    // Total* = sum of this object's own Information/Error counters (§9.1.11.2)
+    addComputedCounter(diagnostics, "TotalInformation", INFO, () -> totalValue(path, specs, INFO));
+    addComputedCounter(diagnostics, "TotalError", ERR, () -> totalValue(path, specs, ERR));
+
+    BaseDataVariableTypeNode subError =
+        addVariableNode(diagnostics, "SubError", NodeIds.Boolean, new Variant(false));
+    subError.getFilterChain().addLast(AttributeFilters.getValue(ctx -> subErrorValue(path)));
+
+    // Reset (§9.1.11.3): zeroes this component's engine counters, guarded by checkConfigure
+    UaMethodNode reset = addMethodNode(diagnostics, "Reset");
+    reset.setInvocationHandler(new ComponentResetMethod(reset, path));
+
+    BaseObjectTypeNode counters =
+        addObjectNode(
+            BaseObjectTypeNode::new,
+            childNodeId(diagnostics, "Counters"),
+            new QualifiedName(0, "Counters"),
+            NodeIds.BaseObjectType,
+            NodeIds.HasComponent,
+            diagnostics.getNodeId());
+    for (CounterSpec spec : specs) {
+      addCounter(counters, spec.browseName(), path, spec.counter(), spec.classification());
+    }
+
+    return addObjectNode(
+        BaseObjectTypeNode::new,
+        childNodeId(diagnostics, "LiveValues"),
+        new QualifiedName(0, "LiveValues"),
+        NodeIds.BaseObjectType,
+        NodeIds.HasComponent,
+        diagnostics.getNodeId());
+  }
+
+  /** Add an engine-backed PubSubDiagnosticsCounterType counter under a Counters folder. */
+  private void addCounter(
+      UaNode counters,
+      String name,
+      String path,
+      Counter counter,
+      PubSubDiagnosticsCounterClassification classification) {
+
+    addCounterVariable(
+        counters,
+        name,
+        classification,
+        () -> counterDataValue(path, counter),
+        () -> timeFirstChangeDataValue(path, counter));
+  }
+
+  /** Add a computed (Total*) PubSubDiagnosticsCounterType counter with no TimeFirstChange. */
+  private void addComputedCounter(
+      UaNode parent,
+      String name,
+      PubSubDiagnosticsCounterClassification classification,
+      Supplier<DataValue> valueSupplier) {
+
+    addCounterVariable(parent, name, classification, valueSupplier, null);
+  }
+
+  /**
+   * Create a PubSubDiagnosticsCounterType variable under {@code parent} whose UInt32 Value is
+   * computed at read time by {@code valueSupplier}, with its Mandatory {@code Active} (always true,
+   * a Basic counter), {@code Classification}, and {@code DiagnosticsLevel} (Basic) properties. When
+   * {@code timeFirstChangeSupplier} is non-null the Optional {@code TimeFirstChange} is added too.
+   */
+  private void addCounterVariable(
+      UaNode parent,
+      String name,
+      PubSubDiagnosticsCounterClassification classification,
+      Supplier<DataValue> valueSupplier,
+      @Nullable Supplier<DataValue> timeFirstChangeSupplier) {
+
+    NodeId nodeId = childNodeId(parent, name);
+
+    var node =
+        new PubSubDiagnosticsCounterTypeNode(
+            getNodeContext(),
+            nodeId,
+            new QualifiedName(0, name),
+            LocalizedText.english(name),
+            LocalizedText.NULL_VALUE,
+            uint(0),
+            uint(0),
+            null,
+            null,
+            null,
+            new DataValue(new Variant(uint(0))),
+            NodeIds.UInt32,
+            ValueRanks.Scalar,
+            null);
+
+    node.addReference(
+        new Reference(
+            nodeId,
+            NodeIds.HasTypeDefinition,
+            NodeIds.PubSubDiagnosticsCounterType.expanded(),
+            Reference.Direction.FORWARD));
+
+    getNodeManager().addNode(node);
+
+    node.addReference(
+        new Reference(
+            nodeId,
+            NodeIds.HasComponent,
+            parent.getNodeId().expanded(),
+            Reference.Direction.INVERSE));
+
+    node.getFilterChain().addLast(AttributeFilters.getValue(ctx -> valueSupplier.get()));
+
+    addPropertyNode(node, "Active", NodeIds.Boolean, ValueRanks.Scalar, new Variant(true));
+    addPropertyNode(
+        node,
+        "Classification",
+        NodeIds.PubSubDiagnosticsCounterClassification,
+        ValueRanks.Scalar,
+        new Variant(classification));
+    addPropertyNode(
+        node,
+        "DiagnosticsLevel",
+        NodeIds.DiagnosticsLevel,
+        ValueRanks.Scalar,
+        new Variant(DiagnosticsLevel.Basic));
+
+    if (timeFirstChangeSupplier != null) {
+      PropertyTypeNode timeFirstChange =
+          addPropertyNode(
+              node, "TimeFirstChange", NodeIds.DateTime, ValueRanks.Scalar, Variant.NULL_VALUE);
+      timeFirstChange
+          .getFilterChain()
+          .addLast(AttributeFilters.getValue(ctx -> timeFirstChangeSupplier.get()));
+    }
+  }
+
+  /** Add a UInt16 count LiveValue whose value is computed at read time (Configured/Operational). */
+  private void addCountLiveValue(UaNode liveValues, String name, IntSupplier count) {
+    BaseDataVariableTypeNode node =
+        addVariableNode(liveValues, name, NodeIds.UInt16, new Variant(ushort(0)));
+    node.getFilterChain()
+        .addLast(AttributeFilters.getValue(ctx -> countDataValue(count.getAsInt())));
+  }
+
+  /**
+   * Add the Optional {@code MajorVersion}/{@code MinorVersion} LiveValues from a DataSet's
+   * ConfigurationVersion (pin R13); omitted (conformant) when no configured version is available.
+   */
+  private void addDataSetVersionLiveValues(
+      UaNode liveValues, @Nullable ConfigurationVersionDataType version) {
+
+    if (version == null) {
+      return;
+    }
+    addVariableNode(
+        liveValues, "MajorVersion", NodeIds.UInt32, new Variant(version.getMajorVersion()));
+    addVariableNode(
+        liveValues, "MinorVersion", NodeIds.UInt32, new Variant(version.getMinorVersion()));
+  }
+
+  /**
+   * Add the Optional §9.1.11.12 {@code MessageSequenceNumber} LiveValue (pin R13) for a
+   * DataSetReader, computed at read time from the last DataSet delivered to {@code readerPath} (see
+   * {@link #registerListeners}). UInt16 per Table 331; reads {@code 0} until the first DataSet is
+   * received.
+   */
+  private void addMessageSequenceNumberLiveValue(UaNode liveValues, String readerPath) {
+    BaseDataVariableTypeNode node =
+        addVariableNode(
+            liveValues, "MessageSequenceNumber", NodeIds.UInt16, new Variant(ushort(0)));
+    node.getFilterChain()
+        .addLast(AttributeFilters.getValue(ctx -> messageSequenceNumberDataValue(readerPath)));
+  }
+
+  /** The last DataSetMessage sequence number received by the reader at {@code readerPath}. */
+  private DataValue messageSequenceNumberDataValue(String readerPath) {
+    UShort seq = active ? lastReaderMessageSeq.getOrDefault(readerPath, ushort(0)) : ushort(0);
+    return new DataValue(new Variant(seq), StatusCode.GOOD);
+  }
+
+  // region ns0 root diagnostics + capabilities
+
+  /** Back the loader-built ns0 Diagnostics root ({@code i=17409}) and PubSubCapabilities. */
+  private void exposeNs0Diagnostics() {
+    exposeRootDiagnostics();
+    exposeCapabilities();
+  }
+
+  /**
+   * Back the ns0 root Diagnostics ({@code i=17409}) subtree: values are set on the existing
+   * loader-built nodes and the Reset handler is attached; no ns0 node is minted (pin R18). The root
+   * object's own counters (the six State*) are not engine-backed at the service level, so they and
+   * their Total* sums are 0; the useful root signals are {@code SubError} (any component in error)
+   * and the LiveValues counts, computed at read time.
+   */
+  private void exposeRootDiagnostics() {
+    setNs0Value(
+        NodeIds.PublishSubscribe_Diagnostics_DiagnosticsLevel, new Variant(DiagnosticsLevel.Basic));
+
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_TotalInformation,
+        NodeIds.PublishSubscribe_Diagnostics_TotalInformation_Active,
+        NodeIds.PublishSubscribe_Diagnostics_TotalInformation_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_TotalInformation_DiagnosticsLevel,
+        INFO);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_TotalError,
+        NodeIds.PublishSubscribe_Diagnostics_TotalError_Active,
+        NodeIds.PublishSubscribe_Diagnostics_TotalError_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_TotalError_DiagnosticsLevel,
+        ERR);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateError,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateError_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateError_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateError_DiagnosticsLevel,
+        ERR);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByMethod,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByMethod_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByMethod_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByMethod_DiagnosticsLevel,
+        INFO);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByParent,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByParent_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByParent_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalByParent_DiagnosticsLevel,
+        INFO);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalFromError,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalFromError_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalFromError_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateOperationalFromError_DiagnosticsLevel,
+        INFO);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StatePausedByParent,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StatePausedByParent_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StatePausedByParent_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StatePausedByParent_DiagnosticsLevel,
+        INFO);
+    initNs0Counter(
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateDisabledByMethod,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateDisabledByMethod_Active,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateDisabledByMethod_Classification,
+        NodeIds.PublishSubscribe_Diagnostics_Counters_StateDisabledByMethod_DiagnosticsLevel,
+        INFO);
+
+    bindNs0GetValue(NodeIds.PublishSubscribe_Diagnostics_SubError, () -> subErrorValue(""));
+    bindNs0GetValue(
+        NodeIds.PublishSubscribe_Diagnostics_LiveValues_ConfiguredDataSetWriters,
+        () -> countDataValue(writerCounts(null, null)[0]));
+    bindNs0GetValue(
+        NodeIds.PublishSubscribe_Diagnostics_LiveValues_ConfiguredDataSetReaders,
+        () -> countDataValue(readerCounts(null, null)[0]));
+    bindNs0GetValue(
+        NodeIds.PublishSubscribe_Diagnostics_LiveValues_OperationalDataSetWriters,
+        () -> countDataValue(writerCounts(null, null)[1]));
+    bindNs0GetValue(
+        NodeIds.PublishSubscribe_Diagnostics_LiveValues_OperationalDataSetReaders,
+        () -> countDataValue(readerCounts(null, null)[1]));
+
+    bindNs0ResetMethod();
+  }
+
+  /**
+   * Populate the ns0 PubSubCapabilities object ({@code i=23678}) (pin R20). {@code Max*} are 0 ("no
+   * limit"): Milo enforces no fixed component-count cap, and the {@code ReserveIds} allocator only
+   * bounds AUTO-assigned ids ({@code 0x8000-0xFFFF}); clients may still supply their own ids across
+   * the full range, so the advertised "no limit" agrees with actual behavior. {@code
+   * SupportSecurityKeyPull} is true (the SKS pull provider exists), {@code SupportSecurityKeyPush}
+   * is false (cut per K16), and {@code SupportSecurityKeyServer} reflects the SKS-server option.
+   */
+  private void exposeCapabilities() {
+    for (NodeId maxNode : CAPABILITY_MAX_NODES) {
+      setNs0Value(maxNode, new Variant(uint(0)));
+    }
+    setNs0Value(
+        NodeIds.PublishSubscribe_PubSubCapablities_SupportSecurityKeyPull, new Variant(true));
+    setNs0Value(
+        NodeIds.PublishSubscribe_PubSubCapablities_SupportSecurityKeyPush, new Variant(false));
+    setNs0Value(
+        NodeIds.PublishSubscribe_PubSubCapablities_SupportSecurityKeyServer,
+        new Variant(sksServerEnabled));
+  }
+
+  /** Set a static counter Value (0) and its Mandatory Active/Classification/DiagnosticsLevel. */
+  private void initNs0Counter(
+      NodeId valueNode,
+      NodeId activeNode,
+      NodeId classificationNode,
+      NodeId levelNode,
+      PubSubDiagnosticsCounterClassification classification) {
+
+    setNs0Value(valueNode, new Variant(uint(0)));
+    setNs0Value(activeNode, new Variant(true));
+    setNs0Value(classificationNode, new Variant(classification));
+    setNs0Value(levelNode, new Variant(DiagnosticsLevel.Basic));
+  }
+
+  /** Set the value of an existing ns0 variable node by NodeId; never mints (pin R18). */
+  private void setNs0Value(NodeId nodeId, Variant value) {
+    getServer()
+        .getAddressSpaceManager()
+        .getManagedNode(nodeId)
+        .filter(UaVariableNode.class::isInstance)
+        .map(UaVariableNode.class::cast)
+        .ifPresentOrElse(
+            node -> node.setValue(new DataValue(value)),
+            () -> LOGGER.warn("ns0 diagnostics node not found: {}", nodeId));
+  }
+
+  /**
+   * Attach a read-time computed value to an existing ns0 variable node and register its removal for
+   * shutdown, so the ns0 skeleton is left inert when the exposure stops.
+   */
+  private void bindNs0GetValue(NodeId nodeId, Supplier<DataValue> supplier) {
+    getServer()
+        .getAddressSpaceManager()
+        .getManagedNode(nodeId)
+        .filter(UaVariableNode.class::isInstance)
+        .map(UaVariableNode.class::cast)
+        .ifPresentOrElse(
+            node -> {
+              AttributeFilter filter = AttributeFilters.getValue(ctx -> supplier.get());
+              node.getFilterChain().addFirst(filter);
+              ns0DiagnosticsCleanup.add(() -> node.getFilterChain().remove(filter));
+            },
+            () -> LOGGER.warn("ns0 diagnostics node not found: {}", nodeId));
+  }
+
+  /** Bind the ns0 root Reset method handler and register its restore for shutdown. */
+  private void bindNs0ResetMethod() {
+    getServer()
+        .getAddressSpaceManager()
+        .getManagedNode(NodeIds.PublishSubscribe_Diagnostics_Reset)
+        .filter(UaMethodNode.class::isInstance)
+        .map(UaMethodNode.class::cast)
+        .ifPresentOrElse(
+            method -> {
+              method.setInvocationHandler(new RootResetMethod(method));
+              ns0DiagnosticsCleanup.add(
+                  () -> method.setInvocationHandler(MethodInvocationHandler.NOT_IMPLEMENTED));
+            },
+            () ->
+                LOGGER.warn(
+                    "ns0 Diagnostics Reset method node not found: {}",
+                    NodeIds.PublishSubscribe_Diagnostics_Reset));
+  }
+
+  /** Undo the ns0 diagnostics exposure: remove getValue filters and restore the Reset handler. */
+  private void teardownNs0Diagnostics() {
+    ns0DiagnosticsCleanup.forEach(Runnable::run);
+    ns0DiagnosticsCleanup.clear();
+  }
+
+  // endregion
+
+  // region diagnostics value computation
+
+  /** The UInt32-clamped value of {@code counter} at {@code path}, with a fresh SourceTimestamp. */
+  private DataValue counterDataValue(String path, Counter counter) {
+    long raw =
+        active ? service.diagnostics().component(path).map(d -> d.counter(counter)).orElse(0L) : 0L;
+    return uintDataValue(ComponentDiagnostics.toUInt32Saturating(raw));
+  }
+
+  /** The §9.1.11.5 TimeFirstChange of {@code counter} at {@code path} (null while it is 0). */
+  private DataValue timeFirstChangeDataValue(String path, Counter counter) {
+    DateTime firstChange =
+        active
+            ? service
+                .diagnostics()
+                .component(path)
+                .flatMap(d -> d.timeFirstChange(counter))
+                .orElse(null)
+            : null;
+    return new DataValue(new Variant(firstChange), StatusCode.GOOD);
+  }
+
+  /** Sum this object's own counters of {@code classification} at {@code path}, UInt32-clamped. */
+  private DataValue totalValue(
+      String path, List<CounterSpec> specs, PubSubDiagnosticsCounterClassification classification) {
+
+    long sum = 0;
+    if (active) {
+      Optional<ComponentDiagnostics> diagnostics = service.diagnostics().component(path);
+      if (diagnostics.isPresent()) {
+        for (CounterSpec spec : specs) {
+          if (spec.classification() == classification) {
+            sum += diagnostics.get().counter(spec.counter());
+          }
+        }
+      }
+    }
+    return uintDataValue(ComponentDiagnostics.toUInt32Saturating(sum));
+  }
+
+  /** True if any descendant component of {@code path} ({@code ""} = root) carries an error. */
+  private DataValue subErrorValue(String path) {
+    return new DataValue(new Variant(active && hasErrorDescendant(path)), StatusCode.GOOD);
+  }
+
+  private boolean hasErrorDescendant(String path) {
+    String prefix = path.isEmpty() ? "" : path + "/";
+    for (Map.Entry<String, ComponentDiagnostics> entry :
+        service.diagnostics().snapshot().entrySet()) {
+      String candidate = entry.getKey();
+      boolean descendant = prefix.isEmpty() ? !candidate.isEmpty() : candidate.startsWith(prefix);
+      if (descendant && hasError(entry.getValue())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasError(ComponentDiagnostics diagnostics) {
+    for (Counter counter : ERROR_COUNTERS) {
+      if (diagnostics.counter(counter) > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static DataValue uintDataValue(long value) {
+    return new DataValue(new Variant(uint(value)), StatusCode.GOOD);
+  }
+
+  private static DataValue countDataValue(int count) {
+    return new DataValue(new Variant(ushort(Math.min(count, 65535))), StatusCode.GOOD);
+  }
+
+  /**
+   * {@code {configured, operational}} DataSetWriter counts over the current configuration, scoped
+   * to {@code connectionFilter}/{@code groupFilter} (null = no filter, e.g. the service root).
+   */
+  private int[] writerCounts(@Nullable String connectionFilter, @Nullable String groupFilter) {
+    PubSubConfiguration2DataType configuration = builtConfiguration;
+    int configured = 0;
+    int operational = 0;
+    if (active && configuration != null) {
+      for (PubSubConnectionDataType connection :
+          orEmpty(configuration.getConnections(), PubSubConnectionDataType[]::new)) {
+        if (connection == null) {
+          continue;
+        }
+        String connectionName = nullToEmpty(connection.getName());
+        if (connectionFilter != null && !connectionFilter.equals(connectionName)) {
+          continue;
+        }
+        for (WriterGroupDataType group :
+            orEmpty(connection.getWriterGroups(), WriterGroupDataType[]::new)) {
+          if (group == null) {
+            continue;
+          }
+          String groupName = nullToEmpty(group.getName());
+          if (groupFilter != null && !groupFilter.equals(groupName)) {
+            continue;
+          }
+          for (DataSetWriterDataType writer :
+              orEmpty(group.getDataSetWriters(), DataSetWriterDataType[]::new)) {
+            if (writer == null) {
+              continue;
+            }
+            configured++;
+            if (isOperational(
+                service
+                    .components()
+                    .dataSetWriter(connectionName, groupName, nullToEmpty(writer.getName())))) {
+              operational++;
+            }
+          }
+        }
+      }
+    }
+    return new int[] {configured, operational};
+  }
+
+  /** {@code {configured, operational}} DataSetReader counts; see {@link #writerCounts}. */
+  private int[] readerCounts(@Nullable String connectionFilter, @Nullable String groupFilter) {
+    PubSubConfiguration2DataType configuration = builtConfiguration;
+    int configured = 0;
+    int operational = 0;
+    if (active && configuration != null) {
+      for (PubSubConnectionDataType connection :
+          orEmpty(configuration.getConnections(), PubSubConnectionDataType[]::new)) {
+        if (connection == null) {
+          continue;
+        }
+        String connectionName = nullToEmpty(connection.getName());
+        if (connectionFilter != null && !connectionFilter.equals(connectionName)) {
+          continue;
+        }
+        for (ReaderGroupDataType group :
+            orEmpty(connection.getReaderGroups(), ReaderGroupDataType[]::new)) {
+          if (group == null) {
+            continue;
+          }
+          String groupName = nullToEmpty(group.getName());
+          if (groupFilter != null && !groupFilter.equals(groupName)) {
+            continue;
+          }
+          for (DataSetReaderDataType reader :
+              orEmpty(group.getDataSetReaders(), DataSetReaderDataType[]::new)) {
+            if (reader == null) {
+              continue;
+            }
+            configured++;
+            if (isOperational(
+                service
+                    .components()
+                    .dataSetReader(connectionName, groupName, nullToEmpty(reader.getName())))) {
+              operational++;
+            }
+          }
+        }
+      }
+    }
+    return new int[] {configured, operational};
+  }
+
+  private boolean isOperational(Optional<PubSubHandle> handle) {
+    return handle
+        .map(
+            h -> {
+              try {
+                return service.state(h) == PubSubState.Operational;
+              } catch (IllegalArgumentException e) {
+                return false;
+              }
+            })
+        .orElse(false);
+  }
+
+  /**
+   * The connection's ResolvedAddress (pin R15): for UDP, a best-effort hostname resolution of the
+   * configured URL at exposure time; for MQTT (and unresolvable UDP), the configured broker URL
+   * verbatim. A documented approximation — there is no transport-SPI accessor for the actually
+   * resolved remote address in this version.
+   */
+  private String resolveAddress(PubSubConnectionDataType connection) {
+    String url =
+        connection.getAddress() instanceof NetworkAddressUrlDataType urlAddress
+            ? urlAddress.getUrl()
+            : null;
+    if (url == null || url.isBlank()) {
+      return "";
+    }
+    if (UdpTransportProvider.TRANSPORT_PROFILE_URI.equals(connection.getTransportProfileUri())) {
+      try {
+        String host = URI.create(url).getHost();
+        if (host != null) {
+          return InetAddress.getByName(host).getHostAddress();
+        }
+      } catch (Exception e) {
+        LOGGER.debug("could not resolve UDP address '{}': {}", url, e.getMessage());
+      }
+    }
+    return url;
+  }
+
+  /** Index DataSet ConfigurationVersion by PublishedDataSet name for the writer LiveValues. */
+  private static Map<String, ConfigurationVersionDataType> dataSetVersions(
+      PubSubConfiguration2DataType configuration) {
+
+    var versions = new HashMap<String, ConfigurationVersionDataType>();
+    for (PublishedDataSetDataType dataSet :
+        orEmpty(configuration.getPublishedDataSets(), PublishedDataSetDataType[]::new)) {
+      if (dataSet == null || dataSet.getName() == null) {
+        continue;
+      }
+      DataSetMetaDataType metaData = dataSet.getDataSetMetaData();
+      if (metaData != null && metaData.getConfigurationVersion() != null) {
+        versions.put(dataSet.getName(), metaData.getConfigurationVersion());
+      }
+    }
+    return versions;
+  }
+
+  // endregion
+
+  // region diagnostics Reset method handlers
+
+  /** Reset a per-component diagnostics object's counters (pin R18), guarded by checkConfigure. */
+  private final class ComponentResetMethod extends PubSubDiagnosticsType.ResetMethod {
+
+    private final String path;
+
+    ComponentResetMethod(UaMethodNode node, String path) {
+      super(node);
+      this.path = path;
+    }
+
+    @Override
+    protected void invoke(InvocationContext context) throws UaException {
+      requireConfigureSession(context);
+      service.diagnostics().reset(path);
+    }
+  }
+
+  /**
+   * Reset for the ns0 root diagnostics object. Its own counters (the six State*) are not
+   * engine-backed at the service level, so there is nothing to zero; §9.1.11.3 Reset acts only on
+   * this object's counters, never on the child diagnostics objects. Authorized calls return Good.
+   */
+  private final class RootResetMethod extends PubSubDiagnosticsType.ResetMethod {
+
+    RootResetMethod(UaMethodNode node) {
+      super(node);
+    }
+
+    @Override
+    protected void invoke(InvocationContext context) throws UaException {
+      requireConfigureSession(context);
+    }
   }
 
   // endregion

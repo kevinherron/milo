@@ -28,6 +28,7 @@ public final class ServerPubSubOptions {
   private final boolean allowRemoteConfiguration;
   private final @Nullable PubSubConfigurationStore configurationStore;
   private final boolean diagnosticsEnabled;
+  private final boolean statusEventsEnabled;
   private final boolean sksServerEnabled;
   private final PubSubMethodAuthorizer methodAuthorizer;
   private final PubSubBindings bindings;
@@ -37,6 +38,7 @@ public final class ServerPubSubOptions {
     this.allowRemoteConfiguration = builder.allowRemoteConfiguration;
     this.configurationStore = builder.configurationStore;
     this.diagnosticsEnabled = builder.diagnosticsEnabled;
+    this.statusEventsEnabled = builder.statusEventsEnabled;
     this.sksServerEnabled = builder.sksServerEnabled;
     this.methodAuthorizer = builder.methodAuthorizer;
     this.bindings = builder.bindings;
@@ -81,6 +83,17 @@ public final class ServerPubSubOptions {
   }
 
   /**
+   * Get whether PubSub status events (Part 14 §9.1.13 {@code PubSubStatusEventType} state changes
+   * and {@code PubSubCommunicationFailureEventType} send failures) are emitted through the server's
+   * event bus.
+   *
+   * @return {@code true} if status events are emitted; defaults to {@code false}.
+   */
+  public boolean isStatusEventsEnabled() {
+    return statusEventsEnabled;
+  }
+
+  /**
    * Get whether the server acts as a minimal Part 14 Security Key Service for the SecurityGroups of
    * the attached configuration, implementing the well-known {@code GetSecurityKeys} method.
    *
@@ -122,6 +135,7 @@ public final class ServerPubSubOptions {
     builder.allowRemoteConfiguration = allowRemoteConfiguration;
     builder.configurationStore = configurationStore;
     builder.diagnosticsEnabled = diagnosticsEnabled;
+    builder.statusEventsEnabled = statusEventsEnabled;
     builder.sksServerEnabled = sksServerEnabled;
     builder.methodAuthorizer = methodAuthorizer;
     builder.bindings = bindings;
@@ -140,6 +154,7 @@ public final class ServerPubSubOptions {
         && allowRemoteConfiguration == that.allowRemoteConfiguration
         && Objects.equals(configurationStore, that.configurationStore)
         && diagnosticsEnabled == that.diagnosticsEnabled
+        && statusEventsEnabled == that.statusEventsEnabled
         && sksServerEnabled == that.sksServerEnabled
         && methodAuthorizer.equals(that.methodAuthorizer)
         && bindings.equals(that.bindings);
@@ -152,6 +167,7 @@ public final class ServerPubSubOptions {
         allowRemoteConfiguration,
         configurationStore,
         diagnosticsEnabled,
+        statusEventsEnabled,
         sksServerEnabled,
         methodAuthorizer,
         bindings);
@@ -173,6 +189,7 @@ public final class ServerPubSubOptions {
     private boolean allowRemoteConfiguration = false;
     private @Nullable PubSubConfigurationStore configurationStore;
     private boolean diagnosticsEnabled = false;
+    private boolean statusEventsEnabled = false;
     private boolean sksServerEnabled = false;
     private PubSubMethodAuthorizer methodAuthorizer = PubSubMethodAuthorizer.defaultAuthorizer();
     private PubSubBindings bindings = PubSubBindings.builder().build();
@@ -230,6 +247,27 @@ public final class ServerPubSubOptions {
      */
     public Builder diagnosticsEnabled(boolean value) {
       this.diagnosticsEnabled = value;
+      return this;
+    }
+
+    /**
+     * Set whether PubSub status events are emitted through the server's event bus (pin R17).
+     *
+     * <p>When enabled, {@link ServerPubSub} bridges {@link
+     * org.eclipse.milo.opcua.sdk.pubsub.PubSubService} state changes to Part 14 §9.1.13 {@code
+     * PubSubStatusEventType} events ({@code i=15535}) and send failures to {@code
+     * PubSubCommunicationFailureEventType} events ({@code i=15563}), firing them on the server's
+     * EventNotifier so clients subscribed to Events on the Server Object receive them.
+     * Dispose-driven teardown produces no events, and communication failures are reported at most
+     * once per failure episode per component. Independent of {@link #diagnosticsEnabled} and {@link
+     * #exposeInformationModel} (the CUs are separate and events do not require the information
+     * model).
+     *
+     * @param value {@code true} to emit status events.
+     * @return this {@link Builder}.
+     */
+    public Builder statusEventsEnabled(boolean value) {
+      this.statusEventsEnabled = value;
       return this;
     }
 

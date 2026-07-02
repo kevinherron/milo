@@ -16,8 +16,11 @@ import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.
 
 import java.net.NetworkInterface;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import org.eclipse.milo.opcua.sdk.core.Reference;
@@ -26,6 +29,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.ReconfigureResult;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfigFiles;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupRef;
 import org.eclipse.milo.opcua.sdk.server.AddressSpaceFilter;
 import org.eclipse.milo.opcua.sdk.server.Lifecycle;
 import org.eclipse.milo.opcua.sdk.server.ManagedAddressSpaceFragmentWithLifecycle;
@@ -67,6 +71,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2Da
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfigurationRefDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfigurationValueDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConnectionDataType;
+import org.eclipse.milo.opcua.stack.core.types.structured.SecurityGroupDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.WriterGroupDataType;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -494,6 +499,17 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
       currentVersionTime = versionTime;
       applied = true;
 
+      // pin R7 / §6.2.12.2: a SecurityGroup whose SecurityPolicyUri or KeyLifetime changed has all
+      // its existing keys invalidated. The reconfigure above already restarted the referencing
+      // groups (which re-register and re-fetch), but a SecurityGroup shared by more than one
+      // still-running group would keep its stale key window alive through the surviving
+      // registration; invalidate the key manager's state explicitly so the drop is guaranteed.
+      for (SecurityGroupRef ref :
+          securityGroupsToInvalidate(
+              currentDataType.getSecurityGroups(), result.candidate().getSecurityGroups())) {
+        service.invalidateSecurityKeys(ref);
+      }
+
       reserveIdRegistry.releaseUsed(session.getSessionId(), result.candidate());
       persist(newConfig);
       setNs0Value(NodeIds.PublishSubscribe_ConfigurationVersion, new Variant(versionTime));
@@ -575,6 +591,45 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
   }
 
   // endregion
+
+  /**
+   * The SecurityGroups whose {@code SecurityPolicyUri} or {@code KeyLifetime} changed between
+   * {@code oldGroups} and {@code newGroups} (matched by name): their held keys must be invalidated
+   * per Part 14 §6.2.12.2. Added groups are excluded (they have no prior keys) and removed groups
+   * are excluded (their consumers unregister and drop their key state through the reconfigure
+   * itself); a change to any other field (e.g. {@code MaxPastKeyCount}, folder, properties) does
+   * not invalidate keys.
+   */
+  static List<SecurityGroupRef> securityGroupsToInvalidate(
+      SecurityGroupDataType @Nullable [] oldGroups, SecurityGroupDataType @Nullable [] newGroups) {
+
+    if (oldGroups == null || newGroups == null) {
+      return List.of();
+    }
+
+    var oldByName = new LinkedHashMap<String, SecurityGroupDataType>();
+    for (SecurityGroupDataType group : oldGroups) {
+      if (group != null && group.getName() != null) {
+        oldByName.put(group.getName(), group);
+      }
+    }
+
+    var refs = new ArrayList<SecurityGroupRef>();
+    for (SecurityGroupDataType group : newGroups) {
+      if (group == null || group.getName() == null) {
+        continue;
+      }
+      SecurityGroupDataType old = oldByName.get(group.getName());
+      if (old == null) {
+        continue;
+      }
+      if (!Objects.equals(old.getSecurityPolicyUri(), group.getSecurityPolicyUri())
+          || !Objects.equals(old.getKeyLifetime(), group.getKeyLifetime())) {
+        refs.add(new SecurityGroupRef(group.getName()));
+      }
+    }
+    return refs;
+  }
 
   private static void collectConfigIds(
       PubSubConfiguration2DataType config,

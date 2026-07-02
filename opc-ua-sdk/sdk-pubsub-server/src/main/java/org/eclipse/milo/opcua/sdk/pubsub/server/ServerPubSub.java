@@ -133,6 +133,7 @@ public final class ServerPubSub implements AutoCloseable {
   private final @Nullable PubSubInfoModelFragment fragment;
   private final @Nullable SksServer sksServer;
   private final @Nullable RemoteConfigurationServer remoteConfigurationServer;
+  private final @Nullable PubSubStatusEventBridge statusEventBridge;
 
   /** The automatic TargetVariables writers, keyed by reader path; deactivated at shutdown. */
   private final Map<String, TargetVariablesWriter> writers;
@@ -164,6 +165,11 @@ public final class ServerPubSub implements AutoCloseable {
             .build();
 
     this.service = PubSubService.create(config, bindings, serviceConfig);
+
+    // pin R17: bridge PubSub state changes and send failures to OPC UA events, gated separately
+    // from diagnosticsEnabled and independent of the exposed information model
+    this.statusEventBridge =
+        options.isStatusEventsEnabled() ? new PubSubStatusEventBridge(server, service) : null;
 
     if (!writers.isEmpty()) {
       service.addStateListener(
@@ -359,6 +365,12 @@ public final class ServerPubSub implements AutoCloseable {
       }
     }
 
+    // register the status-event listeners before starting the service so the startup state
+    // transitions are reported; listener registration cannot fail
+    if (statusEventBridge != null) {
+      statusEventBridge.startup();
+    }
+
     return service.startup().thenApply(s -> this);
   }
 
@@ -374,6 +386,12 @@ public final class ServerPubSub implements AutoCloseable {
    * @return a {@link CompletableFuture} that completes once shutdown has finished.
    */
   public CompletableFuture<Void> shutdown() {
+    // remove the status-event listeners first so the dispose-driven teardown transitions the
+    // service is about to emit produce no events (they would be DISPOSE-filtered anyway)
+    if (statusEventBridge != null) {
+      statusEventBridge.shutdown();
+    }
+
     return service
         .shutdown()
         .whenComplete(
