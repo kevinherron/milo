@@ -62,4 +62,17 @@ class ExtensionObjectTest {
     assertTrue(encoded.isNull());
     assertEquals(NodeId.NULL_VALUE, encoded.getEncodingOrTypeId());
   }
+
+  @Test
+  void decodeNullExtensionObjectYieldsNull() {
+    var context = new DefaultEncodingContext();
+
+    // the round-trip counterpart of encode(context, null): a null ExtensionObject must decode back
+    // to null rather than attempting to look up a codec for NodeId.NULL_VALUE and throwing.
+    ExtensionObject nullXo = ExtensionObject.encode(context, null);
+    assertTrue(nullXo.isNull());
+
+    assertNull(nullXo.decode(context));
+    assertNull(nullXo.decode(context, OpcUaDefaultBinaryEncoding.getInstance()));
+  }
 }

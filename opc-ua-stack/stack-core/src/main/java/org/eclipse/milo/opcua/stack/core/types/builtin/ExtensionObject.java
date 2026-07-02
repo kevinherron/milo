@@ -67,11 +67,23 @@ public abstract sealed class ExtensionObject
    * Decode the {@link UaStructuredType} value contained in this ExtensionObject using the datatype
    * encoding that matches its body type.
    *
+   * <p>A null ExtensionObject (one whose {@link #isNull()} is {@code true}) decodes to {@code
+   * null}. This is the round-trip counterpart of {@link #encode(EncodingContext, UaStructuredType)}
+   * encoding a {@code null} value to a null ExtensionObject: generated codecs pass optional
+   * abstract-typed structure fields (e.g. a UDP DataSetWriter's absent {@code TransportSettings},
+   * for which Part 14 defines no datagram type) straight through here, so a null ExtensionObject
+   * must decode back to {@code null} rather than being looked up as a (non-existent) encoding id.
+   *
    * @param context an {@link EncodingContext}.
-   * @return the decoded {@link UaStructuredType} value.
+   * @return the decoded {@link UaStructuredType} value, or {@code null} if this is a null
+   *     ExtensionObject.
    * @throws UaSerializationException if the decoding fails.
    */
-  public final UaStructuredType decode(EncodingContext context) throws UaSerializationException {
+  public final @Nullable UaStructuredType decode(EncodingContext context)
+      throws UaSerializationException {
+    if (isNull()) {
+      return null;
+    }
     if (this instanceof ExtensionObject.Binary) {
       return decode(context, OpcUaDefaultBinaryEncoding.getInstance());
     } else if (this instanceof ExtensionObject.Xml) {
@@ -106,13 +118,21 @@ public abstract sealed class ExtensionObject
    * Decode the {@link UaStructuredType} value contained in this ExtensionObject using the specified
    * encoding, if it hasn't already been decoded.
    *
+   * <p>A null ExtensionObject (one whose {@link #isNull()} is {@code true}) decodes to {@code
+   * null}, matching {@link #decode(EncodingContext)}.
+   *
    * @param context an {@link EncodingContext}.
    * @param encoding the {@link DataTypeEncoding} to use.
-   * @return the decoded {@link UaStructuredType} value.
+   * @return the decoded {@link UaStructuredType} value, or {@code null} if this is a null
+   *     ExtensionObject.
    * @throws UaSerializationException if the decoding fails.
    */
-  public final UaStructuredType decode(EncodingContext context, DataTypeEncoding encoding)
+  public final @Nullable UaStructuredType decode(EncodingContext context, DataTypeEncoding encoding)
       throws UaSerializationException {
+
+    if (isNull()) {
+      return null;
+    }
 
     return decoded.get(() -> encoding.decode(context, this));
   }
