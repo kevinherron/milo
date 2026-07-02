@@ -616,7 +616,7 @@ final class UadpNetworkMessageDecoder {
 
     // The message is authenticated from here on: any later failure (payload parsing, decryption
     // structure, chunk consumption) is a failure of verified content, so its header values may
-    // safely affect reader state (K18).
+    // safely affect reader state.
     security = new DecodedNetworkMessage.Security(mode, securityTokenId, forceKeyReset, true);
 
     int payloadStart = buffer.readerIndex();
@@ -736,7 +736,7 @@ final class UadpNetworkMessageDecoder {
 
     // secured = the chunk NM passed signature verification: participates in the assembly key so
     // an UNSECURED chunk spoofing the plaintext (PublisherId, DataSetWriterId) of a secured
-    // stream can never abandon or contribute to a secured in-progress reassembly (the K7 mode
+    // stream can never abandon or contribute to a secured in-progress reassembly (the mode
     // gate runs per-reader AFTER reassembly, too late to protect the reassembly state itself)
     DecodedNetworkMessage.Security security = this.security;
     boolean secured = security != null && security.verified();

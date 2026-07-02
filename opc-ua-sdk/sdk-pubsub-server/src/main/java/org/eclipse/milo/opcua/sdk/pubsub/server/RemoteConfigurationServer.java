@@ -81,11 +81,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The opt-in remote-configuration face of {@link ServerPubSub} (WP-X, Phase 5 pin R1): implements
- * the {@code PublishSubscribe/PubSubConfiguration} FileType object ({@code i=25451}) — {@code
- * Open}/{@code Close}/{@code Read}/{@code Write}/{@code GetPosition}/{@code SetPosition} plus
- * {@code ReserveIds} and {@code CloseAndUpdate} — so a client can read and atomically update the
- * whole PubSub configuration through the normative Part 14 §9.1.3.7 file model.
+ * The opt-in remote-configuration face of {@link ServerPubSub}: implements the {@code
+ * PublishSubscribe/PubSubConfiguration} FileType object ({@code i=25451}) — {@code Open}/{@code
+ * Close}/{@code Read}/{@code Write}/{@code GetPosition}/{@code SetPosition} plus {@code ReserveIds}
+ * and {@code CloseAndUpdate} — so a client can read and atomically update the whole PubSub
+ * configuration through the normative Part 14 §9.1.3.7 file model.
  *
  * <p>Enabled by {@link ServerPubSubOptions.Builder#allowRemoteConfiguration}. On startup it binds
  * the eight handlers to the existing ns0 method nodes, creates the three missing optional
@@ -95,12 +95,12 @@ import org.slf4j.LoggerFactory;
  * {@link SessionListener} so file handles and id reservations are evicted when a session closes. On
  * shutdown it restores the ns0 method nodes to {@code Bad_NotImplemented} and unregisters.
  *
- * <p>Authorization (pin R9): every handler requires a session (session-less internal calls are
- * {@code Bad_UserAccessDenied}) and consults {@link PubSubMethodAuthorizer#checkConfigure};
- * SecurityGroup element references additionally require {@link
- * PubSubMethodAuthorizer#checkSksAdmin}. Persistence (pin R8): a successful {@code CloseAndUpdate}
- * saves through the configured {@link PubSubConfigurationStore} (a save failure is logged and
- * retried on the next mutation, and does not undo the applied change).
+ * <p>Authorization: every handler requires a session (session-less internal calls are {@code
+ * Bad_UserAccessDenied}) and consults {@link PubSubMethodAuthorizer#checkConfigure}; SecurityGroup
+ * element references additionally require {@link PubSubMethodAuthorizer#checkSksAdmin}.
+ * Persistence: a successful {@code CloseAndUpdate} saves through the configured {@link
+ * PubSubConfigurationStore} (a save failure is logged and retried on the next mutation, and does
+ * not undo the applied change).
  */
 final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLifecycle {
 
@@ -131,7 +131,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
 
   /**
    * Whether the information-model fragment is exposed. ConfigurationObjects NodeIds only resolve
-   * when the fragment mints them (pin R4/R11: "the fragment's deterministic NodeIds or empty").
+   * when the fragment mints them (the fragment's deterministic NodeIds, or empty).
    */
   private final boolean exposeInformationModel;
 
@@ -299,14 +299,14 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
   /** Initialize the mandatory FileType property values on the existing ns0 property nodes. */
   private void initializeProperties() {
     // remote configuration is enabled (this component only exists then): writable to any user;
-    // per-user enforcement is via the authorizer, not these capability flags (pin R3)
+    // per-user enforcement is via the authorizer, not these capability flags
     setNs0Value(NodeIds.PublishSubscribe_PubSubConfiguration_Writable, new Variant(true));
     setNs0Value(NodeIds.PublishSubscribe_PubSubConfiguration_UserWritable, new Variant(true));
     setNs0Value(NodeIds.PublishSubscribe_PubSubConfiguration_OpenCount, new Variant(ushort(0)));
     setNs0Value(
         NodeIds.PublishSubscribe_PubSubConfiguration_Size,
         new Variant(ulong(materializeCurrentBytes().length)));
-    // publish the initial VersionTime (retire the mapper's uint(0) placeholder, pin R8) so it
+    // publish the initial VersionTime (retire the mapper's uint(0) placeholder) so it
     // agrees with the materialized read file's ConfigurationVersion
     setNs0Value(NodeIds.PublishSubscribe_ConfigurationVersion, new Variant(currentVersionTime));
   }
@@ -404,7 +404,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
         dataType.getConfigurationProperties());
   }
 
-  /** Extract the session for a client call, or reject internal/unauthorized calls (pin R9). */
+  /** Extract the session for a client call, or reject internal/unauthorized calls. */
   private Session requireConfigureSession(InvocationContext context) throws UaException {
     Session session = context.getSession().orElse(null);
     if (session == null) {
@@ -495,7 +495,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
 
     RemoteConfigurationApplier.Result result = applier.apply(references, versionTime);
 
-    // pin R4: atomic mode applies only if every ref succeeded; partial mode applies survivors
+    // atomic mode applies only if every ref succeeded; partial mode applies survivors
     boolean apply =
         Boolean.TRUE.equals(requireCompleteUpdate) ? result.allGood() : result.anyGood();
 
@@ -516,7 +516,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
         currentVersionTime = versionTime;
         applied = true;
 
-        // pin R7 / §6.2.12.2: a SecurityGroup whose SecurityPolicyUri or KeyLifetime changed has
+        // §6.2.12.2: a SecurityGroup whose SecurityPolicyUri or KeyLifetime changed has
         // all its existing keys invalidated. The reconfigure above already restarted the
         // referencing groups (which re-register and re-fetch), but a SecurityGroup shared by more
         // than one still-running group would keep its stale key window alive through the surviving
@@ -560,7 +560,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
   }
 
   /**
-   * Map the applier's name paths to deterministic ns-app NodeIds (pin R11); empty path → NULL.
+   * Map the applier's name paths to deterministic ns-app NodeIds; empty path → NULL.
    *
    * <p>Only the exposed {@link PubSubInfoModelFragment} mints these {@code PubSub/<path>} Objects,
    * so when the information model is not exposed the array is empty — a client browsing a returned
@@ -636,7 +636,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
     return result;
   }
 
-  /** Persist the applied configuration (pin R8); a failure is logged and retried next mutation. */
+  /** Persist the applied configuration; a failure is logged and retried next mutation. */
   private void persist(PubSubConfig config) {
     if (store == null) {
       return;
@@ -644,7 +644,7 @@ final class RemoteConfigurationServer extends ManagedAddressSpaceFragmentWithLif
     try {
       store.save(config.toDataType(namespaceTable));
     } catch (Exception e) {
-      // pin R8: a save failure does not undo the applied change; the next successful mutation
+      // a save failure does not undo the applied change; the next successful mutation
       // re-runs persist() and thus retries the save
       LOGGER.warn("Error saving configuration after CloseAndUpdate; will retry next mutation", e);
     }

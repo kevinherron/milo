@@ -34,10 +34,10 @@ import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransportCo
 
 /**
  * A started, endpoint-bound {@link OpcUaServer} plus a connected {@link OpcUaClient}, the minimal
- * client/server pair the WP-T5 status-event client tests need to drive Part 14 §9.1.13 events
- * through a <b>real</b> event subscription (the shared {@link TestPubSubServer} fixture is endpoint
- * -less and never started, so it can only be observed through a direct {@code EventNotifier}
- * listener — not a client Subscription).
+ * client/server pair the status-event client tests need to drive Part 14 §9.1.13 events through a
+ * <b>real</b> event subscription (the shared {@link TestPubSubServer} fixture is endpoint-less and
+ * never started, so it can only be observed through a direct {@code EventNotifier} listener — not a
+ * client Subscription).
  *
  * <p>Deliberately minimal and CI-safe: a single {@code SecurityPolicy.None} / anonymous TCP
  * endpoint bound to {@code 127.0.0.1} on an ephemeral port (so no certificates, BouncyCastle, or

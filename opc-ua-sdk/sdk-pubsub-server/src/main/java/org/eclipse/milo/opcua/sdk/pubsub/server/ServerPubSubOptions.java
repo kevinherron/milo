@@ -251,7 +251,7 @@ public final class ServerPubSubOptions {
     }
 
     /**
-     * Set whether PubSub status events are emitted through the server's event bus (pin R17).
+     * Set whether PubSub status events are emitted through the server's event bus.
      *
      * <p>When enabled, {@link ServerPubSub} bridges {@link
      * org.eclipse.milo.opcua.sdk.pubsub.PubSubService} state changes to Part 14 §9.1.13 {@code

@@ -73,10 +73,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * TargetVariables behavior per pinned decisions S5/S6, end-to-end: an in-process standalone
- * publisher service drives a {@link ServerPubSub}-attached DataSetReader over unicast loopback UDP,
- * and the Part 14 §6.2.11.1 Table 80 message-to-target mapping is asserted as address-space writes
- * on the embedded test server's nodes.
+ * TargetVariables behavior, end-to-end: an in-process standalone publisher service drives a {@link
+ * ServerPubSub}-attached DataSetReader over unicast loopback UDP, and the Part 14 §6.2.11.1 Table
+ * 80 message-to-target mapping is asserted as address-space writes on the embedded test server's
+ * nodes.
  *
  * <p>Network safety: every connection uses unicast 127.0.0.1 with ephemeral ports and an explicit
  * loopback {@code discoveryAddress}, so the engine's discovery channels never touch the default
@@ -329,7 +329,7 @@ class ServerPubSubTargetVariablesIntegrationTest {
         lastNodeId, value -> Double.valueOf(5.5).equals(value.value().value()), "TV3_Last == 5.5");
 
     // no usable value was ever received for "never": (null, Uncertain_LastUsableValue) -- the
-    // pinned deviation from Table 80 footnote (b): no DataType-default synthesis
+    // deliberate deviation from Table 80 footnote (b): no DataType-default synthesis
     awaitValue(
         neverNodeId,
         value -> value.statusCode().value() == StatusCodes.Uncertain_LastUsableValue,

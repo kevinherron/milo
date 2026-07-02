@@ -880,16 +880,16 @@ class DeltaFrameCadenceTest {
    * A writer in {@code PubSubState.Error} emits NO keep-alives: a keep-alive asserts the writer is
    * still active (§6.2.6.3), which an Error writer is not — emitting one would mask its failure
    * from subscribers, who would keep resetting their receive timeouts against a writer that can
-   * never produce data. Reached the HG4 way (the only path to a writer-level Error under an
-   * Operational group: the group-level activation re-check rejects any enabled RawData writer
-   * outright): a RawData writer disabled at startup (tolerated) is enabled at runtime and fails the
-   * writer-level activation re-check into Error, while its sibling keeps publishing. The sibling's
-   * source never changes, so after its initial key frame the wire carries nothing but its
-   * keep-alives; pre-gate, the Error writer's keep-alives (due from group activation on) joined the
-   * same shared partition — and since its RawData mask is rejected by the encoder backstop, they
-   * poisoned the whole NetworkMessage, silencing the healthy sibling too (with a feature the
-   * encoder could express, they would instead have masked the Error from subscribers).
-   * Disabled/Paused keep-alive emission is unchanged (pinned by
+   * never produce data. Reached via the only path to a writer-level Error under an Operational
+   * group (the group-level activation re-check rejects any enabled RawData writer outright): a
+   * RawData writer disabled at startup (tolerated) is enabled at runtime and fails the writer-level
+   * activation re-check into Error, while its sibling keeps publishing. The sibling's source never
+   * changes, so after its initial key frame the wire carries nothing but its keep-alives; pre-gate,
+   * the Error writer's keep-alives (due from group activation on) joined the same shared partition
+   * — and since its RawData mask is rejected by the encoder backstop, they poisoned the whole
+   * NetworkMessage, silencing the healthy sibling too (with a feature the encoder could express,
+   * they would instead have masked the Error from subscribers). Disabled/Paused keep-alive emission
+   * is unchanged (pinned by
    * PubSubStateMachineTest#keepAliveEmittedPerNonOperationalWriterWithoutSequenceIncrement).
    */
   @Test
@@ -945,7 +945,7 @@ class DeltaFrameCadenceTest {
             UdpDatagramAddress.multicast("239.255.74.33", 24763).networkInterface("127.0.0.1"));
 
     // enabling W2 is first seen by the writer-level activation re-check, which fails it into
-    // Error (the HG4 backstop); the group and W1 stay Operational
+    // Error (the activation-time backstop); the group and W1 stay Operational
     PubSubHandle w2 = service.components().dataSetWriter("conn", "WG", "W2").orElseThrow();
     service.enable(w2);
 

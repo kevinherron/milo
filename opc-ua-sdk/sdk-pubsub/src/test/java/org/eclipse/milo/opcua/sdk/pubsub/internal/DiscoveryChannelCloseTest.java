@@ -57,9 +57,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Discovery channels are opened lazily when a connection first needs them (a writer group's
- * responder leg here) and, per the Phase 2 deferred item now closed by WP-W, are closed again when
- * a reconfiguration removes the last component that required them. Data channels use an in-memory
- * stub transport; the discovery channels use the built-in UDP transport on a free loopback port.
+ * responder leg here) and are closed again when a reconfiguration removes the last component that
+ * required them. Data channels use an in-memory stub transport; the discovery channels use the
+ * built-in UDP transport on a free loopback port.
  */
 class DiscoveryChannelCloseTest {
 

@@ -24,8 +24,8 @@ import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for the Phase 5 R12 {@link DiagnosticsCollector} enrichment: the six Part 14 Table 311
- * state counters attributed by transition cause and remembered trigger, {@code
+ * Unit tests for the {@link DiagnosticsCollector} enrichment: the six Part 14 Table 311 state
+ * counters attributed by transition cause and remembered trigger, {@code
  * FailedTransmissions}/{@code FailedDataSetMessages}, per-counter TimeFirstChange, {@code
  * reset(path)} (counters only, lastError preserved), and the exposure-time UInt32 saturation clamp
  * over the engine's unbounded 64-bit counters.

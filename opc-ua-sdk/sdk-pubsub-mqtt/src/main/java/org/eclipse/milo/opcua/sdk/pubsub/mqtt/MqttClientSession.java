@@ -127,8 +127,8 @@ final class MqttClientSession {
   private final @Nullable Mqtt3SimpleAuth simpleAuth3;
 
   /**
-   * The engine's connectivity callback (R16), or {@code null} when none was supplied. Invoked on
-   * every (re)connect and disconnect from the HiveMQ listener threads; the engine hops to its own
+   * The engine's connectivity callback, or {@code null} when none was supplied. Invoked on every
+   * (re)connect and disconnect from the HiveMQ listener threads; the engine hops to its own
    * executor before touching its state machine.
    */
   private final @Nullable TransportStateListener transportStateListener;
@@ -366,7 +366,7 @@ final class MqttClientSession {
 
     entries.forEach(entry -> subscribeEntry(adapter, entry));
 
-    // report the (re)connect to the engine (R16): the connection recovers to Operational, which
+    // report the (re)connect to the engine: the connection recovers to Operational, which
     // re-activates its writers and re-publishes retained metadata; a no-op when already operational
     notifyTransportStateListener(true);
   }
@@ -387,7 +387,7 @@ final class MqttClientSession {
       return;
     }
 
-    // report the disconnect to the engine (R16): the connection fails into Error, pausing its
+    // report the disconnect to the engine: the connection fails into Error, pausing its
     // writers/readers until a reconnect; a no-op when the connection is not currently active
     notifyTransportStateListener(false);
 

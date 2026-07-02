@@ -298,7 +298,7 @@ class UadpSecurityCodecTest {
 
   /**
    * The literal Table 154 sign-only form — SecurityTokenId 0, NonceLength 0 — is accepted on decode
-   * (K4: NonceLength is self-describing; the nonce is not needed to verify).
+   * (NonceLength is self-describing; the nonce is not needed to verify).
    */
   @Test
   void signOnlyLiteralZeroNonceFormAccepted() throws Exception {

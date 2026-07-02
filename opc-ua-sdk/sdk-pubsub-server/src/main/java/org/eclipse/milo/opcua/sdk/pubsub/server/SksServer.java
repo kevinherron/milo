@@ -21,14 +21,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The opt-in, minimal Security Key Service face of {@link ServerPubSub} (K15): binds the {@code
+ * The opt-in, minimal Security Key Service face of {@link ServerPubSub}: binds the {@code
  * GetSecurityKeys} handler to the well-known ns0 method node ({@code i=15215} on the
  * PublishSubscribe object {@code i=14443}) and manages the {@link SecurityGroupKeyStore} lifecycle.
  *
- * <p>Deliberately not implemented in this version (deferred per K15): {@code GetSecurityGroup}, the
- * SecurityGroups folder methods ({@code AddSecurityGroup}/{@code RemoveSecurityGroup} and the
- * folder variants), {@code InvalidateKeys}, and {@code ForceKeyRotation} — their ns0 nodes keep
- * returning {@code Bad_NotImplemented}. Push distribution ({@code SetSecurityKeys}) is cut per K16.
+ * <p>Deliberately not implemented in this version: {@code GetSecurityGroup}, the SecurityGroups
+ * folder methods ({@code AddSecurityGroup}/{@code RemoveSecurityGroup} and the folder variants),
+ * {@code InvalidateKeys}, and {@code ForceKeyRotation} — their ns0 nodes keep returning {@code
+ * Bad_NotImplemented}. Push distribution ({@code SetSecurityKeys}) is not supported in this
+ * version.
  *
  * <p>At most one SKS-enabled {@link ServerPubSub} may be attached to a given {@link OpcUaServer}:
  * the handler binding on the shared ns0 node is exclusive, and shutdown restores {@code

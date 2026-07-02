@@ -460,7 +460,7 @@ class MqttTransportConfigTest {
     // completes even though the broker is unreachable
     service.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // the initial connect to the unreachable broker fails, which the transport reports (R16): the
+    // the initial connect to the unreachable broker fails, which the transport reports: the
     // connection moves to Error and its writer group pauses. Any publish cycle that raced ahead of
     // the disconnect recorded the channel's real, un-flattened status (Bad_ServerNotConnected),
     // no longer the former blanket Bad_CommunicationError.

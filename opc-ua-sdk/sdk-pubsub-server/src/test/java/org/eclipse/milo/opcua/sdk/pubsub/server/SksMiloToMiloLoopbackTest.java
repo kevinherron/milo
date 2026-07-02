@@ -78,16 +78,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The K20 "SKS pull + secured pub + secured sub" row, Milo pulling from Milo full circle: one
- * embedded SKS server (the WP-V {@code GetSecurityKeys} face), a publisher-side and a
- * subscriber-side {@link PubSubService} each bound to its own {@link SksSecurityKeyProvider}
- * pulling the SAME SecurityGroup over real SignAndEncrypt sessions, and SignAndEncrypt-secured UADP
- * traffic on unicast loopback UDP decoding end-to-end.
+ * The "SKS pull + secured pub + secured sub" scenario, Milo pulling from Milo full circle: one
+ * embedded SKS server (the {@code GetSecurityKeys} face), a publisher-side and a subscriber-side
+ * {@link PubSubService} each bound to its own {@link SksSecurityKeyProvider} pulling the SAME
+ * SecurityGroup over real SignAndEncrypt sessions, and SignAndEncrypt-secured UADP traffic on
+ * unicast loopback UDP decoding end-to-end.
  *
  * <p>Delivery itself proves the security chain: the reader group is configured {@code
- * SignAndEncrypt}, so the K7 mode gate drops (and counts) anything received below that mode — an
- * event can only arrive if the publisher emitted a secured NetworkMessage the subscriber verified
- * and decrypted with SKS-distributed keys. The test additionally pins zero security-error counters
+ * SignAndEncrypt}, so the mode gate drops (and counts) anything received below that mode — an event
+ * can only arrive if the publisher emitted a secured NetworkMessage the subscriber verified and
+ * decrypted with SKS-distributed keys. The test additionally pins zero security-error counters
  * ({@code encryptionErrors}, {@code decryptionErrors}, {@code invalidSignatureMessages}, {@code
  * unknownTokenMessages}, {@code staleKeyMessages}, {@code securityModeRejectedMessages}) and zero
  * {@code decodeErrors} on every component of both services, and one cached SKS session per side.
@@ -315,7 +315,7 @@ class SksMiloToMiloLoopbackTest {
 
   /**
    * The SecurityGroup as configured on the pub/sub sides: same wire id and policy as the SKS
-   * server's group (K8: a policy mismatch would fail the fetch).
+   * server's group (a policy mismatch would fail the fetch).
    */
   private static SecurityGroupConfig securityGroup() {
     return SecurityGroupConfig.builder(GROUP_ID)

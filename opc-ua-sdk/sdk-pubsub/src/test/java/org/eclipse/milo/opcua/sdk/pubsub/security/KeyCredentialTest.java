@@ -16,9 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link KeyCredential} pinned record shape (K13): {@code toString()} never includes the secret,
- * and record equality compares the secret array by identity (not content) because the record does
- * not copy or inspect it.
+ * {@link KeyCredential} pinned record shape: {@code toString()} never includes the secret, and
+ * record equality compares the secret array by identity (not content) because the record does not
+ * copy or inspect it.
  */
 class KeyCredentialTest {
 

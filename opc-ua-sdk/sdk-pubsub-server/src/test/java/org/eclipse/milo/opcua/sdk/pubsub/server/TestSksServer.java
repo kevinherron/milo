@@ -39,7 +39,7 @@ import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransportCo
 import org.jspecify.annotations.Nullable;
 
 /**
- * A minimal <b>started</b> embedded {@link OpcUaServer} fixture for the WP-T4 SKS end-to-end tests:
+ * A minimal <b>started</b> embedded {@link OpcUaServer} fixture for the SKS end-to-end tests:
  * unlike {@link TestPubSubServer} (endpoint-less, never started), this fixture binds real {@code
  * opc.tcp} endpoints on {@code 127.0.0.1} with an ephemeral port so real clients — {@code
  * OpcUaClient} sessions and the sdk-pubsub-sks pull provider — can open channels of every {@link

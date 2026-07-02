@@ -89,11 +89,11 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Engine-level message security dispatch tests through {@link PubSubService} with a stub transport:
- * the K18 regression (a NetworkMessage that fails signature verification — or is rejected by the
- * per-reader mode gate — must not advance any §7.2.3 sequence window), the K7 mode matrix basics
- * (drop below configured counted; None-configured reader drops secured counted; process above
- * configured when keys resolve), the K6 unknown-token counting, and secured publisher emission with
- * the per-cycle {@link MessageSecurityContext}.
+ * the sequence-window regression (a NetworkMessage that fails signature verification — or is
+ * rejected by the per-reader mode gate — must not advance any §7.2.3 sequence window), the mode
+ * matrix basics (drop below configured counted; None-configured reader drops secured counted;
+ * process above configured when keys resolve), the unknown-token counting, and secured publisher
+ * emission with the per-cycle {@link MessageSecurityContext}.
  */
 class SecuredReaderDispatchTest {
 
@@ -357,13 +357,13 @@ class SecuredReaderDispatchTest {
     service.addDataSetListener(new DataSetReaderRef("conn", "RGN", "RN"), plainEvents::add);
 
     // 1. a valid signed key frame is verified, resolved (token 1), and delivered to the Sign
-    //    reader; the None reader drops it, counted (K7: no SecurityGroup to supply keys)
+    //    reader; the None reader drops it, counted (no SecurityGroup to supply keys)
     transport.inject(encodeFrame(10, 0, 1, MessageSecurityMode.Sign, 1));
     DataSetReceivedEvent event = securedEvents.poll(10, TimeUnit.SECONDS);
     assertNotNull(event);
     assertEquals(uint(0), event.dataSetMessageSequenceNumber());
 
-    // 2. K18 regression: a tampered frame consuming NM sequence 11 is dropped whole with an
+    // 2. A tampered frame consuming NM sequence 11 is dropped whole with an
     //    invalid signature and must NOT advance the NetworkMessage window...
     transport.inject(tamper(encodeFrame(11, 1, 99, MessageSecurityMode.Sign, 1)));
     awaitTrue(
@@ -375,11 +375,11 @@ class SecuredReaderDispatchTest {
     // ...so the authentic NetworkMessage with the SAME sequence number 11 is NEW, not stale
     transport.inject(encodeFrame(11, 1, 2, MessageSecurityMode.Sign, 1));
     event = securedEvents.poll(10, TimeUnit.SECONDS);
-    assertNotNull(event, "verified frame after a tampered one must be delivered (K18)");
+    assertNotNull(event, "verified frame after a tampered one must be delivered");
     assertEquals(uint(1), event.dataSetMessageSequenceNumber());
     assertEquals(Variant.ofInt32(2), event.fields().get(0).value().getValue());
 
-    // 3. K7 SHALL: an unsecured frame at the Sign-configured reader is dropped and counted —
+    // 3. SHALL: an unsecured frame at the Sign-configured reader is dropped and counted —
     //    BEFORE the window, so it must not advance it either; the None reader receives it
     transport.inject(encodeFrame(12, 2, 3, null, 0));
     DataSetReceivedEvent plainEvent = plainEvents.poll(10, TimeUnit.SECONDS);
@@ -393,10 +393,10 @@ class SecuredReaderDispatchTest {
     // the secured frame with the same NM sequence 12 is still NEW for the Sign reader
     transport.inject(encodeFrame(12, 2, 4, MessageSecurityMode.Sign, 1));
     event = securedEvents.poll(10, TimeUnit.SECONDS);
-    assertNotNull(event, "gate-rejected unsecured frame must not advance the window (K18)");
+    assertNotNull(event, "gate-rejected unsecured frame must not advance the window");
     assertEquals(uint(2), event.dataSetMessageSequenceNumber());
 
-    // 4. K6: an unknown SecurityTokenId drops the message and counts at the group; the window
+    // 4. An unknown SecurityTokenId drops the message and counts at the group; the window
     //    again does not move
     transport.inject(encodeFrame(13, 3, 98, MessageSecurityMode.Sign, 99));
     awaitTrue(
@@ -406,10 +406,10 @@ class SecuredReaderDispatchTest {
 
     transport.inject(encodeFrame(13, 3, 5, MessageSecurityMode.Sign, 1));
     event = securedEvents.poll(10, TimeUnit.SECONDS);
-    assertNotNull(event, "unresolved-keys drop must not advance the window (K18)");
+    assertNotNull(event, "unresolved-keys drop must not advance the window");
     assertEquals(uint(3), event.dataSetMessageSequenceNumber());
 
-    // 5. K7 MAY: a SignAndEncrypt frame at the Sign-configured reader is processed when its
+    // 5. MAY: a SignAndEncrypt frame at the Sign-configured reader is processed when its
     //    SecurityGroup supplies the keys
     transport.inject(encodeFrame(14, 4, 6, MessageSecurityMode.SignAndEncrypt, 1));
     event = securedEvents.poll(10, TimeUnit.SECONDS);
@@ -417,7 +417,7 @@ class SecuredReaderDispatchTest {
     assertEquals(uint(4), event.dataSetMessageSequenceNumber());
     assertEquals(Variant.ofInt32(6), event.fields().get(0).value().getValue());
 
-    // K7 counting for the None-configured reader: one tick per secured NetworkMessage it
+    // Counting for the None-configured reader: one tick per secured NetworkMessage it
     // matched — the five decoded secured frames (steps 1-5) plus the unknown-token drop; the
     // tampered frame is not mode-counted (it is the invalid-signature count)
     assertEquals(

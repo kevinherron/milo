@@ -19,7 +19,7 @@ import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link MessageSecurityContext} construction validation (the K5 encode seam): mode must be Sign or
+ * {@link MessageSecurityContext} construction validation (the encode seam): mode must be Sign or
  * SignAndEncrypt (mode None is represented by a {@code null} context on the EncodeContext, and
  * Invalid is the per-reader inherit sentinel — neither is ever a secured context), and the key
  * material must belong to the stated policy.

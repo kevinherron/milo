@@ -33,8 +33,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link SecurityGroupKeyStore} rotation, window, and slice semantics (Part 14 §8.3.2, K15/K6),
- * driven through the {@link InstantSource} test seam so no test waits on real time.
+ * {@link SecurityGroupKeyStore} rotation, window, and slice semantics (Part 14 §8.3.2), driven
+ * through the {@link InstantSource} test seam so no test waits on real time.
  *
  * <p>The canonical fixture group uses KeyLifetime PT1H, MaxFutureKeyCount 3, MaxPastKeyCount 2,
  * PubSub-Aes128-CTR (52-byte key data).

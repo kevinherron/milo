@@ -92,12 +92,12 @@ import org.junit.jupiter.params.provider.MethodSource;
  * dispatcher — landing only in the decode/mode-gate taxonomy, never a spurious decrypt/token/stale
  * error), never delivered, and unsecured traffic on a sibling reader group keeps flowing throughout
  * — and a hand-built two-chunk SECURED NetworkMessage (Part 14 §7.2.4.4.4 Tables 158/159, each
- * chunk signed and encrypted individually per K19) reassembles through the connection's {@code
+ * chunk signed and encrypted individually) reassembles through the connection's {@code
  * ChunkReassembler} into a delivered event.
  *
  * <p>Byte-level truncation tolerance of the codec alone is pinned in UadpDecodeToleranceTest; this
- * class asserts the ENGINE consequences: counter classification (WP-Q Failure.Reason mapping),
- * reader health, and delivery isolation.
+ * class asserts the ENGINE consequences: counter classification (Failure.Reason mapping), reader
+ * health, and delivery isolation.
  */
 class SecuredDispatchToleranceTest {
 
@@ -192,7 +192,7 @@ class SecuredDispatchToleranceTest {
    * SecurityGroup "SG", reader "R1" on DataSetWriterId 1, plus an unsecured sibling group "RGN"
    * with reader "RN" on DataSetWriterId 2. The secured reader shares the publisher's mode so its
    * intact frames deliver; the None sibling exercises delivery isolation (and legitimately
-   * mode-drops the secured frames it matches at header level, K7).
+   * mode-drops the secured frames it matches at header level).
    */
   private void startService(MessageSecurityMode readerMode) throws Exception {
     transport = new StubTransport();
@@ -267,9 +267,9 @@ class SecuredDispatchToleranceTest {
 
   /**
    * The sum of every NetworkMessage-level drop-classification counter a rejected datagram can land
-   * in: the WP-Q Failure.Reason taxonomy (decodeErrors / invalidSignature / decrypt / token /
-   * stale) fanned out over the paths it may be attributed to. Deliberately excludes the per-reader
-   * K7 mode-gate counter ({@code securityModeRejectedMessages}), which {@link #totalDrops} adds.
+   * in: the Failure.Reason taxonomy (decodeErrors / invalidSignature / decrypt / token / stale)
+   * fanned out over the paths it may be attributed to. Deliberately excludes the per-reader
+   * mode-gate counter ({@code securityModeRejectedMessages}), which {@link #totalDrops} adds.
    */
   private long nmLevelDrops() {
     long sum = 0;
@@ -286,11 +286,11 @@ class SecuredDispatchToleranceTest {
   }
 
   /**
-   * Every classified-drop counter across all component paths, INCLUDING the per-reader K7 mode
-   * gate. A garbage datagram is legitimately attributed on more than one path: a secured frame no
-   * reader can decode is a per-reader mode drop at every matched reader (the SHALL applies to each
-   * reader independently), and a tampered-with-signature frame is an invalid-signature drop at
-   * every matched reader group — so the meaningful invariant is that this total strictly increases
+   * Every classified-drop counter across all component paths, INCLUDING the per-reader mode gate. A
+   * garbage datagram is legitimately attributed on more than one path: a secured frame no reader
+   * can decode is a per-reader mode drop at every matched reader (the SHALL applies to each reader
+   * independently), and a tampered-with-signature frame is an invalid-signature drop at every
+   * matched reader group — so the meaningful invariant is that this total strictly increases
    * (nothing silently swallowed), not that any single counter moves by exactly one.
    */
   private long totalDrops() {
@@ -403,7 +403,7 @@ class SecuredDispatchToleranceTest {
    * nothing, and lands only in the decode/mode-gate taxonomy — never a spurious decrypt, token, or
    * stale-key error. Unsecured traffic to the sibling reader group keeps delivering throughout, and
    * the intact secured frame still delivers at the end (the drops did not poison reader state or
-   * the §7.2.3 window — K18).
+   * the §7.2.3 window).
    */
   @ParameterizedTest(name = "{0}")
   @MethodSource("truncationModes")
@@ -459,7 +459,7 @@ class SecuredDispatchToleranceTest {
     // a fresh, higher sequence number (200) so this assertion is independent of window state
     // (unverifiedSecuredFrameMustNotAdvanceTheSequenceWindow pins that even the truncated
     // copies' own sequence number would still deliver — unverified frames never advance the
-    // §7.2.3 window, K18)
+    // §7.2.3 window)
     long nmDropsBefore = nmLevelDrops();
     injectAndFlush(encodeFrame(1, 200, 50, 42, mode));
 
@@ -474,7 +474,7 @@ class SecuredDispatchToleranceTest {
   }
 
   /**
-   * K18: an unverified secured NetworkMessage must not advance the reader's Part 14 §7.2.3 sequence
+   * An unverified secured NetworkMessage must not advance the reader's Part 14 §7.2.3 sequence
    * window — the window runs only after signature verification, so an unauthenticated datagram
    * cannot poison it.
    *
@@ -508,7 +508,7 @@ class SecuredDispatchToleranceTest {
     assertTrue(securedEvents.isEmpty(), "the unverified frame delivers nothing");
 
     // the authentic frame at NM seq 10 must still be new: the unverified frame must not have
-    // advanced the window (K18)
+    // advanced the window
     injectAndFlush(encodeFrame(1, 10, 1, 42, MessageSecurityMode.SignAndEncrypt));
     DataSetReceivedEvent authentic = securedEvents.poll();
     assertNotNull(
@@ -522,10 +522,10 @@ class SecuredDispatchToleranceTest {
   }
 
   /**
-   * K19 end-to-end: a DataSetMessage split into two chunk NetworkMessages (Part 14 §7.2.4.4.4,
-   * Tables 158/159), each signed AND encrypted individually with its own MessageNonce, reassembles
-   * through the connection's ChunkReassembler and delivers one event through the normal dispatch
-   * path — verify/decrypt per chunk first, reassembly after (the K19 ordering).
+   * End-to-end: a DataSetMessage split into two chunk NetworkMessages (Part 14 §7.2.4.4.4, Tables
+   * 158/159), each signed AND encrypted individually with its own MessageNonce, reassembles through
+   * the connection's ChunkReassembler and delivers one event through the normal dispatch path —
+   * verify/decrypt per chunk first, reassembly after.
    */
   @Test
   void securedChunkedNetworkMessageReassemblesThroughTheDispatcher() throws Exception {
@@ -552,7 +552,7 @@ class SecuredDispatchToleranceTest {
 
     // the first chunk yields no messages and no errors: reassembly is in progress. (The
     // None-configured sibling reader RN matches the chunk NetworkMessage at header level and
-    // counts its K7 mode drop of the secured frame — the SHALL applies to chunk NMs too.)
+    // counts its mode drop of the secured frame — the SHALL applies to chunk NMs too.)
     injectAndFlush(chunk1);
     assertTrue(securedEvents.isEmpty());
     assertEquals(0, nmLevelDrops(), "an in-progress chunk is not a drop");
@@ -560,7 +560,7 @@ class SecuredDispatchToleranceTest {
         1,
         counter(
             "conn/RGN/RN", PubSubDiagnostics.ComponentDiagnostics::securityModeRejectedMessages),
-        "the None-configured reader counts the secured chunk NetworkMessage it matched (K7)");
+        "the None-configured reader counts the secured chunk NetworkMessage it matched");
 
     // the second chunk completes the message: the reassembled DataSetMessage is dispatched to
     // the secured reader (chunk PayloadHeader DataSetWriterId = 1)
@@ -581,7 +581,7 @@ class SecuredDispatchToleranceTest {
     assertNull(securedEvents.poll());
   }
 
-  // region chunk building (Part 14 §7.2.4.4.4 Tables 158/159; K19 per-chunk security)
+  // region chunk building (Part 14 §7.2.4.4.4 Tables 158/159; per-chunk security)
 
   private static byte[] bytes(int... values) {
     byte[] bs = new byte[values.length];

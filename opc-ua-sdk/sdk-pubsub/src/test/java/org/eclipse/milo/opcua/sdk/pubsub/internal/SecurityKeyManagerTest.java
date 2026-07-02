@@ -55,9 +55,9 @@ import org.junit.jupiter.api.Test;
 /**
  * Unit tests for {@link SecurityKeyManager}: fetch/startup wiring, the Part 14 §8.3.2 token switch
  * schedule and FirstTokenId dedup/discard rules, the §6.2.12.2 2x-KeyLifetime staleness rules on
- * both sides, the static-key form, the K8 policy precedence gate, and the K6 unknown-token
- * single-flight refresh. Time is driven through an injected nano clock, so no test waits on key
- * lifetimes; provider fetches run on a real single-thread scheduler and are awaited by polling.
+ * both sides, the static-key form, the policy precedence gate, and the unknown-token single-flight
+ * refresh. Time is driven through an injected nano clock, so no test waits on key lifetimes;
+ * provider fetches run on a real single-thread scheduler and are awaited by polling.
  */
 class SecurityKeyManagerTest {
 
@@ -432,7 +432,7 @@ class SecurityKeyManagerTest {
 
   // endregion
 
-  // region K8 policy precedence
+  // region policy precedence
 
   @Test
   void providerPolicyMismatchingConfiguredUriFailsFetch() throws Exception {
@@ -477,7 +477,7 @@ class SecurityKeyManagerTest {
     installProvider(keySet(1, 2)); // serves Aes256Ctr
     registerAndAwaitKeys(); // keys are already held when the second component registers
 
-    // the K8 gate at registration time: the fetch-completion gate only sees the consumers
+    // the gate at registration time: the fetch-completion gate only sees the consumers
     // registered then, so a later registrant must be validated against the held policy — never
     // silently substituted onto a policy other than the URI the operator pinned
     TestComponent second = activeComponent("conn/WG2");
@@ -541,7 +541,7 @@ class SecurityKeyManagerTest {
     installProvider(keySet(1, 3));
     registerAndAwaitKeys();
 
-    // K4: the literal Table 154 sign-only form carries SecurityTokenId 0; token ids are 1-based,
+    // The literal Table 154 sign-only form carries SecurityTokenId 0; token ids are 1-based,
     // so 0 names the currently active key rather than a (below-window) past key
     SecurityKeyManager.SubscriberKey zero = manager.subscriberKey(REF, uint(0));
     assertNotNull(zero.material());
@@ -557,7 +557,7 @@ class SecurityKeyManagerTest {
 
   @Test
   void zeroTokenIdResolvesToTheStaticKey() throws Exception {
-    // the S2OPC-style static-key interop path (K14) emits the zero-token sign-only form
+    // the S2OPC-style static-key interop path emits the zero-token sign-only form
     installProvider(keySet(PubSubSecurityPolicy.Aes128Ctr, 1, 1, Duration.ZERO, Duration.ZERO));
     registerAndAwaitKeys();
 

@@ -19,9 +19,8 @@ import org.eclipse.milo.opcua.stack.core.types.enumerated.BrokerTransportQuality
 import org.junit.jupiter.api.Test;
 
 /**
- * The deferred §6.4.2.5.4 fold-in (Phase 5 WP-X): a DataSetWriter-level {@code
- * RequestedDeliveryGuarantee} override is only valid alongside a writer-level {@code QueueName}
- * override.
+ * The deferred §6.4.2.5.4 fold-in: a DataSetWriter-level {@code RequestedDeliveryGuarantee}
+ * override is only valid alongside a writer-level {@code QueueName} override.
  */
 class WriterQosValidationTest {
 

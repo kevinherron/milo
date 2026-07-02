@@ -164,7 +164,7 @@ class TargetVariablesWriterTest {
 
   @Test
   void badFieldWithLastUsableValueAndNoPriorValueWritesNull() {
-    // pinned deviation from Table 80 footnote (b): no DataType-default synthesis in v1
+    // deliberate deviation from Table 80 footnote (b): no DataType-default synthesis in v1
     NodeId nodeId = scalarNode(NodeIds.Double, Variant.ofDouble(7.5));
 
     TargetVariablesWriter writer =

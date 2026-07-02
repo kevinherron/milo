@@ -30,7 +30,7 @@ import org.jspecify.annotations.Nullable;
  * i=15215}) when {@link ServerPubSubOptions.Builder#sksServerEnabled} is set, serving keys from the
  * attached {@link SecurityGroupKeyStore} (OPC UA Part 14 §8.3.2).
  *
- * <p>Check order (K17):
+ * <p>Check order:
  *
  * <ol>
  *   <li>Channel mode: the session's channel must be {@code SignAndEncrypt}, else {@code

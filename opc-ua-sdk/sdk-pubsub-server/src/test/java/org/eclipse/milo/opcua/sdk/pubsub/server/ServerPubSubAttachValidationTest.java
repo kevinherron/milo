@@ -41,11 +41,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * Attach-time validation per pinned decision S4: every {@link NodeFieldAddress} in the effective
- * configuration — published dataset field sources, direct reader TargetVariables targets, and
- * standalone subscribed dataset TargetVariables targets — must resolve against the server's
- * NamespaceTable, and TargetVariables index ranges must parse. {@code
- * allowRemoteConfiguration(true)} now attaches the remote-configuration FileType model (WP-X).
+ * Attach-time validation: every {@link NodeFieldAddress} in the effective configuration — published
+ * dataset field sources, direct reader TargetVariables targets, and standalone subscribed dataset
+ * TargetVariables targets — must resolve against the server's NamespaceTable, and TargetVariables
+ * index ranges must parse. {@code allowRemoteConfiguration(true)} now attaches the
+ * remote-configuration FileType model.
  */
 class ServerPubSubAttachValidationTest {
 
@@ -260,7 +260,7 @@ class ServerPubSubAttachValidationTest {
     // as null) and the TargetVariable uses a FieldNameSelector with no configured DataSetMetaData
     // (the mapper cannot resolve a DataSetFieldId): both make the configuration unserializable to
     // PubSubConfiguration2DataType, yet it is legal for a locally-configured server. Attach must
-    // not serialize at attach; Size is reported as 0 (FileType-contract open question 4).
+    // not serialize at attach; Size is reported as 0.
     PubSubConfig config =
         readerConfig(
             TargetVariablesConfig.builder()

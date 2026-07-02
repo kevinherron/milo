@@ -44,7 +44,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Bridges {@link PubSubService} state changes and communication failures into OPC UA events (Part
- * 14 §9.1.13, pin R17), firing them through the server's {@link
+ * 14 §9.1.13), firing them through the server's {@link
  * org.eclipse.milo.opcua.sdk.server.EventNotifier EventNotifier} so that clients subscribed to
  * Events on the Server Object (or, when the information model is exposed, on the PubSub component
  * nodes) receive them.
@@ -61,7 +61,7 @@ import org.slf4j.LoggerFactory;
  *       reconfigure-removal or shutdown produces no events).
  *   <li><b>Communication failures</b> as {@code PubSubCommunicationFailureEventType} ({@code
  *       i=15563}), discriminated from the diagnostics-event stream (send failures carry the
- *       WP-W-un-flattened transport {@link StatusCode}, surfaced verbatim in the {@code Error}
+ *       un-flattened transport {@link StatusCode}, surfaced verbatim in the {@code Error}
  *       property).
  * </ul>
  *
@@ -79,9 +79,8 @@ import org.slf4j.LoggerFactory;
  * importantly a connectionless UDP target, whose send failures never drive a state transition
  * (there is no transport-state signal and a later successful publish is not a listener event
  * either): a genuinely new failure episode is still reported at most once per window instead of
- * being dropped for the service lifetime. A dedicated engine send-recovery signal (a WP-W
- * follow-up) would allow exact per-episode re-arm; until then the window bounds the worst-case
- * silence.
+ * being dropped for the service lifetime. A dedicated engine send-recovery signal would allow exact
+ * per-episode re-arm; until then the window bounds the worst-case silence.
  *
  * <p>Gated by {@link ServerPubSubOptions#isStatusEventsEnabled()} (independent of {@link
  * ServerPubSubOptions#isDiagnosticsEnabled()} and {@link

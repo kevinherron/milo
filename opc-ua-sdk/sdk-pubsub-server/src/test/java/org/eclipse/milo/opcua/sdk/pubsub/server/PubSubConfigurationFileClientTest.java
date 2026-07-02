@@ -56,7 +56,7 @@ import org.junit.jupiter.api.Test;
 /**
  * The Part 20 §4.2 / Part 14 §9.1.3.7.1 FileType state machine of {@code
  * PublishSubscribe/PubSubConfiguration} ({@code i=25451}), driven end-to-end by a real {@link
- * OpcUaClient} {@code Call} against an embedded {@link OpcUaServer} — pins R2/R3.
+ * OpcUaClient} {@code Call} against an embedded {@link OpcUaServer}.
  *
  * <p>{@link FileHandleManagerTest} exercises the same rules as direct unit calls; this class
  * deepens them by running each one through the wire: the server-side access controller, method
@@ -439,7 +439,7 @@ class PubSubConfigurationFileClientTest {
         // Part 5 §12.36: a UABinaryFile FileType shall carry this MimeType
         assertEquals("application/opcua+uabinary", appPropertyValue(client, "MimeType"));
 
-        // the read/write buffer bound the file model advertises (pin R3: 1 MiB default)
+        // the read/write buffer bound the file model advertises (1 MiB default)
         assertEquals(
             uint(FileHandleManager.DEFAULT_MAX_BYTE_STRING_LENGTH),
             appPropertyValue(client, "MaxByteStringLength"));

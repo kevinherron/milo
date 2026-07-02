@@ -30,11 +30,11 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.ULong;
  * The FileType state machine for the {@code PublishSubscribe/PubSubConfiguration} FileType object
  * (OPC UA Part 20 §4.2, with the Part 14 §9.1.3.7 overlay). Package-private and self-contained:
  * handle bookkeeping is keyed on {@code (sessionId, fileHandle)} and never touches {@link
- * org.eclipse.milo.opcua.sdk.server.Session} directly, so it is exercisable without a live session
- * (WP-X pin R2). The owning {@code RemoteConfigurationServer} bridges sessions to session {@link
- * NodeId}s and evicts on session close.
+ * org.eclipse.milo.opcua.sdk.server.Session} directly, so it is exercisable without a live session.
+ * The owning {@code RemoteConfigurationServer} bridges sessions to session {@link NodeId}s and
+ * evicts on session close.
  *
- * <p>Contract (WP-X pin R3):
+ * <p>Contract:
  *
  * <ul>
  *   <li>Only modes {@code Read (0x01)}, {@code Read+Write (0x03)} and {@code Write+EraseExisting

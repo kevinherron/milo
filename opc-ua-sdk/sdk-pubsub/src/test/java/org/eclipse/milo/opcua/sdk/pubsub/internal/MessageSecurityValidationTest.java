@@ -69,11 +69,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the K3 startup/reconfigure message security validation that replaced the Phase 0
- * Bad_NotSupported gates: any secured JSON-mapped group/reader is rejected naming
- * BrokerSecurityConfig (JSON has no message security in OPC UA 1.05, Part 14 §7.3.4.1), and a
- * secured UADP group/reader requires a resolvable SecurityGroupRef, a K2-supported policy, a bound
- * SecurityKeyProvider, and valid SecurityKeyServices entries — all {@code Bad_ConfigurationError}.
+ * Tests for the startup/reconfigure message security validation that replaced the Bad_NotSupported
+ * gates: any secured JSON-mapped group/reader is rejected naming BrokerSecurityConfig (JSON has no
+ * message security in OPC UA 1.05, Part 14 §7.3.4.1), and a secured UADP group/reader requires a
+ * resolvable SecurityGroupRef, a supported policy, a bound SecurityKeyProvider, and valid
+ * SecurityKeyServices entries — all {@code Bad_ConfigurationError}.
  */
 class MessageSecurityValidationTest {
 
@@ -185,7 +185,7 @@ class MessageSecurityValidationTest {
     return builder.build();
   }
 
-  // region JSON (K3 verbatim: no message security in 1.05)
+  // region JSON (no message security in 1.05)
 
   @Test
   void securedJsonWriterGroupFailsStartupNamingBrokerSecurityConfig() {
@@ -327,7 +327,7 @@ class MessageSecurityValidationTest {
 
   @Test
   void invalidSecurityKeyServiceEntriesFailStartup() {
-    // a ClientAndServer-typed entry is a hard SecurityKeyServiceValidator error (K9)
+    // a ClientAndServer-typed entry is a hard SecurityKeyServiceValidator error
     var badEntry =
         new EndpointDescription(
             null,
@@ -391,7 +391,7 @@ class MessageSecurityValidationTest {
 
   // endregion
 
-  // region reconfigure (K3 enforces at startup AND reconfigure)
+  // region reconfigure (enforced at startup AND reconfigure)
 
   @Test
   void reconfigureRejectsSecuredJsonGroup() throws Exception {

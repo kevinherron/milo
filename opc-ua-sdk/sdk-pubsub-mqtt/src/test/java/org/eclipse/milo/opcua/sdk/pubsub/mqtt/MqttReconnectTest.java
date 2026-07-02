@@ -113,7 +113,7 @@ class MqttReconnectTest {
       throw e;
     }
 
-    // stop the broker: the transport reports the disconnect (R16), so the publisher connection
+    // stop the broker: the transport reports the disconnect, so the publisher connection
     // fails into Error and its writer group cascades to Paused, stopping publishing
     firstBroker.stop();
 
@@ -140,7 +140,7 @@ class MqttReconnectTest {
       assertEquals(ushort(1), event.dataSetWriterId());
       assertEquals(21.5, event.fieldsByName().get("temperature").value().value());
 
-      // the publisher connection recovers to Operational on reconnect (R16), re-activating its
+      // the publisher connection recovers to Operational on reconnect, re-activating its
       // writer group (which resumes publishing and re-publishes retained metadata)
       awaitTrue(
           () -> publisher.state(pubConn) == PubSubState.Operational,
@@ -164,7 +164,7 @@ class MqttReconnectTest {
   }
 
   /**
-   * R16 retained-metadata republish: metadata is published only at writer activation (no periodic
+   * Retained-metadata republish: metadata is published only at writer activation (no periodic
    * republish is configured), so after the broker is replaced by a fresh instance — whose in-memory
    * retained store starts empty — the only way a subscriber can still discover the writer's
    * metadata is if the publisher RE-PUBLISHED it when its connection recovered to Operational. A
@@ -189,7 +189,7 @@ class MqttReconnectTest {
 
     PubSubHandle pubConn = publisher.components().connection("pub-conn").orElseThrow();
 
-    // stop the broker: the publisher connection fails into Error (R16)
+    // stop the broker: the publisher connection fails into Error
     firstBroker.stop();
     awaitTrue(
         () -> publisher.state(pubConn) == PubSubState.Error,

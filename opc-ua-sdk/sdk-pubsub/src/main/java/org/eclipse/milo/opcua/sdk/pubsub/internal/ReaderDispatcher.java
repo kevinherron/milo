@@ -96,25 +96,25 @@ import org.jspecify.annotations.Nullable;
  * they always reset the receive timeout — while the NetworkMessage that carries them is an ordinary
  * NetworkMessage whose sequence number advances the NetworkMessage window normally.
  *
- * <p><b>Message security</b> (Phase 4): decode runs with the connection's {@link
- * ReaderSecurityResolver} and per-connection {@code ChunkReassembler} on the {@link DecodeContext}.
- * Security-failure classification maps the decoder's failure taxonomy to the per-component
- * counters: {@code SIGNATURE_INVALID} to {@code invalidSignatureMessages} and {@code
- * DECRYPT_FAILED} to {@code decryptionErrors} (ticked at each matched reader group, or the
- * connection when none matches); {@code UNRESOLVED_KEYS} is counted by the resolver (unknown token,
- * stale key) or the per-reader mode gate here, never twice; the remaining reasons flow through the
- * existing {@code decodeErrors} path. Per K7 (§7.2.4.3), a per-reader security gate runs BEFORE the
- * sequence windows: a reader drops (counted in {@code securityModeRejectedMessages})
- * NetworkMessages whose received mode is below its configured mode — including unsecured messages
- * at a secured reader — and secured messages it has no SecurityGroup to supply keys for; a message
- * secured <em>above</em> the configured mode is processed when keys resolved (the MAY). Per K18, a
- * message that failed its security checks (unsupported header, rejected mode, unresolved keys,
- * invalid signature, or any decode failure on a secured message that never passed signature
- * verification — e.g. one truncated too short to carry its signature) never advances any sequence
- * window and delivers nothing — with security active, only verified messages reach the §7.2.3
- * window (a DECRYPT_FAILED message passed verification: its authentic partial content still flows).
- * Discovery metadata announcements stay mode-None by design (K10) and are exempt from the mode
- * gate. A received force-key-reset flag triggers a proactive key refresh even on dropped messages.
+ * <p><b>Message security</b>: decode runs with the connection's {@link ReaderSecurityResolver} and
+ * per-connection {@code ChunkReassembler} on the {@link DecodeContext}. Security-failure
+ * classification maps the decoder's failure taxonomy to the per-component counters: {@code
+ * SIGNATURE_INVALID} to {@code invalidSignatureMessages} and {@code DECRYPT_FAILED} to {@code
+ * decryptionErrors} (ticked at each matched reader group, or the connection when none matches);
+ * {@code UNRESOLVED_KEYS} is counted by the resolver (unknown token, stale key) or the per-reader
+ * mode gate here, never twice; the remaining reasons flow through the existing {@code decodeErrors}
+ * path. Per §7.2.4.3, a per-reader security gate runs BEFORE the sequence windows: a reader drops
+ * (counted in {@code securityModeRejectedMessages}) NetworkMessages whose received mode is below
+ * its configured mode — including unsecured messages at a secured reader — and secured messages it
+ * has no SecurityGroup to supply keys for; a message secured <em>above</em> the configured mode is
+ * processed when keys resolved (the MAY). A message that failed its security checks (unsupported
+ * header, rejected mode, unresolved keys, invalid signature, or any decode failure on a secured
+ * message that never passed signature verification — e.g. one truncated too short to carry its
+ * signature) never advances any sequence window and delivers nothing — with security active, only
+ * verified messages reach the §7.2.3 window (a DECRYPT_FAILED message passed verification: its
+ * authentic partial content still flows). Discovery metadata announcements stay mode-None by design
+ * and are exempt from the mode gate. A received force-key-reset flag triggers a proactive key
+ * refresh even on dropped messages.
  */
 final class ReaderDispatcher {
 
@@ -317,7 +317,7 @@ final class ReaderDispatcher {
 
   /**
    * Whether a decode failure means the message failed its security checks: such a message delivers
-   * nothing and must not advance any sequence window (K18 — only verified messages reach the §7.2.3
+   * nothing and must not advance any sequence window (only verified messages reach the §7.2.3
    * window). {@code DECRYPT_FAILED} is deliberately NOT a fixed member of this set: its signature
    * verified, so its authentic partial content flows through the normal path — and by the same
    * reasoning any failure on a secured message that never passed verification IS a security drop,
@@ -326,7 +326,7 @@ final class ReaderDispatcher {
    * plaintext GroupHeader sequence number must not poison the window (an off-path attacker can
    * craft one from any observed live tokenId, no key knowledge required). Unsecured messages
    * ({@code security == null} or the processed-as-unsecured force-key-reset-only mode-None header)
-   * keep the pre-existing HG2 partial-decode window behavior.
+   * keep the pre-existing partial-decode window behavior.
    */
   private static boolean isSecurityDrop(
       DecodedNetworkMessage.Failure.Reason reason,
@@ -335,7 +335,7 @@ final class ReaderDispatcher {
     return switch (reason) {
       case SECURITY_UNSUPPORTED, SECURITY_MODE_REJECTED, UNRESOLVED_KEYS, SIGNATURE_INVALID -> true;
       case DECODING_ERROR, DECRYPT_FAILED, CHUNK ->
-          // a failure on a secured message that never verified is unauthenticated (K18); a
+          // a failure on a secured message that never verified is unauthenticated; a
           // failure on a VERIFIED secured message occurred after verification (sign-only payload
           // parse, decrypted-payload structure, chunk consumption) and its authentic content and
           // header values flow the normal tolerant path
@@ -344,12 +344,12 @@ final class ReaderDispatcher {
   }
 
   /**
-   * The per-reader K7 security gate (Part 14 §7.2.4.3): a reader SHALL drop messages whose received
+   * The per-reader security gate (Part 14 §7.2.4.3): a reader SHALL drop messages whose received
    * mode is below its configured effective mode — an unsecured message at a secured reader included
    * — and necessarily drops messages secured <em>above</em> its configured mode when it has no
    * SecurityGroup to supply keys; with a SecurityGroup, processing above the configured mode is the
    * spec's MAY. Runs BEFORE the sequence windows so a rejected (and, for received-below-configured,
-   * unverified) message can never advance a window (K18).
+   * unverified) message can never advance a window.
    */
   private static boolean securityGateRejects(
       DataSetReaderRuntime reader, DecodedNetworkMessage.@Nullable Security security) {
@@ -454,7 +454,7 @@ final class ReaderDispatcher {
 
     if (security != null && security.forceKeyReset()) {
       // Table 154 bit 3: the publisher is about to invalidate its keys — refresh proactively
-      // (K6, subscriber side). Surfaced even on dropped messages, so this runs before any gate.
+      // (subscriber side). Surfaced even on dropped messages, so this runs before any gate.
       connection.securityResolver().onForceKeyReset(decoded.publisherId(), decoded.writerGroupId());
     }
 
@@ -474,7 +474,7 @@ final class ReaderDispatcher {
         }
 
         // metadata announcements match on (PublisherId, DataSetWriterId) only; discovery and
-        // metadata NetworkMessages stay mode-None by design (K10), so no mode gate applies
+        // metadata NetworkMessages stay mode-None by design, so no mode gate applies
         for (DecodedMetaData metaData : decoded.metaData()) {
           if (publisherIdMatches(reader.config(), decoded.publisherId())
               && dataSetWriterIdMatches(reader.config(), metaData.dataSetWriterId())) {
@@ -484,9 +484,9 @@ final class ReaderDispatcher {
 
         if (matchesNetworkMessage(reader.config(), decoded)) {
           if (securityDropped) {
-            // K18: a message that failed its security checks delivers nothing and must not
+            // a message that failed its security checks delivers nothing and must not
             // advance any sequence window. For the resolver-decided UNRESOLVED_KEYS drop the
-            // per-reader K7 mode drops are still counted here (the resolver skips
+            // per-reader mode drops are still counted here (the resolver skips
             // mode-incompatible readers without counting; this is the single counting point) —
             // decoder-decided and signature verdicts were counted in dispatch().
             if (unresolvedKeys && securityGateRejects(reader, security)) {
@@ -498,7 +498,7 @@ final class ReaderDispatcher {
           if (securityGateRejects(reader, security)) {
             // §7.2.4.3 SHALL: dropped for this reader, counted, and — deliberately BEFORE the
             // window observation — never advancing the reader's sequence windows: an unsecured
-            // (unverified) message must not move a secured reader's replay window (K18)
+            // (unverified) message must not move a secured reader's replay window
             service.getDiagnostics().securityModeRejectedMessage(reader.path());
             continue;
           }

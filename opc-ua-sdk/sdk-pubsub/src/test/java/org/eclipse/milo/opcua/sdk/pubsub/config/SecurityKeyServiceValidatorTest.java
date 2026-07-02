@@ -91,7 +91,7 @@ class SecurityKeyServiceValidatorTest {
   @Test
   void serverEntryWithOnlyEndpointUrlIsValidButWarned() {
     // The open62541-ecosystem reality: EndpointUrl filled, DiscoveryUrls empty (tolerance
-    // fallback per K12: usable as a discovery target, with a warning).
+    // fallback: usable as a discovery target, with a warning).
     EndpointDescription entry =
         entry("opc.tcp://sks:4840", "urn:sks", ApplicationType.Server, null);
 

@@ -16,10 +16,10 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A {@link PubSubMethodAuthorizer} that denies every check, letting the client-driven remote-config
- * tests exercise the handler-level {@code Bad_UserAccessDenied} path (pin R9) independently of the
- * server's access-control role machinery: with no {@code RoleMapper} configured the access
- * controller allows the {@code Call}, so the denial that reaches the wire is the one this
- * authorizer returns from inside the handler.
+ * tests exercise the handler-level {@code Bad_UserAccessDenied} path independently of the server's
+ * access-control role machinery: with no {@code RoleMapper} configured the access controller allows
+ * the {@code Call}, so the denial that reaches the wire is the one this authorizer returns from
+ * inside the handler.
  */
 final class DenyingAuthorizer implements PubSubMethodAuthorizer {
 

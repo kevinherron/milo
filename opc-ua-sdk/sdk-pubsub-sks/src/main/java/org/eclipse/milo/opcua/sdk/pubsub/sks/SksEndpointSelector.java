@@ -31,12 +31,12 @@ final class SksEndpointSelector {
   /**
    * The discovery URLs to run GetEndpoints at for {@code entry}, in configured order.
    *
-   * <p>Table 40: the targets are {@code server.discoveryUrls}. Tolerance fallback (pinned on): when
-   * the entry carries no discovery URL but a non-conformant filled {@code endpointUrl} (the
-   * open62541 ecosystem shape — Table 40 says it "Shall be null or empty."), the {@code
-   * endpointUrl} is used as a discovery target instead — most servers answer GetEndpoints on
-   * session endpoints too — followed by the same URL with {@code /discovery} appended (the retry
-   * {@code OpcUaClient.create} performs).
+   * <p>Table 40: the targets are {@code server.discoveryUrls}. Tolerance fallback: when the entry
+   * carries no discovery URL but a non-conformant filled {@code endpointUrl} (the open62541
+   * ecosystem shape — Table 40 says it "Shall be null or empty."), the {@code endpointUrl} is used
+   * as a discovery target instead — most servers answer GetEndpoints on session endpoints too —
+   * followed by the same URL with {@code /discovery} appended (the retry {@code OpcUaClient.create}
+   * performs).
    *
    * @param entry a Server-typed SecurityKeyServices entry.
    * @return the discovery targets in the order they should be attempted; empty only for entries

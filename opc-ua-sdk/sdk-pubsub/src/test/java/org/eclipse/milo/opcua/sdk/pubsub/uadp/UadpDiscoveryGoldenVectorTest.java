@@ -55,7 +55,7 @@ class UadpDiscoveryGoldenVectorTest {
 
   private static Stream<Arguments> probeVectors() {
     return Stream.of(
-        // §3 worked example: target publisher Byte 7, DataSetWriterId 100, security None.
+        // Worked example: target publisher Byte 7, DataSetWriterId 100, security None.
         Arguments.of(
             "Byte",
             PublisherId.ubyte(ubyte(7)),
@@ -139,7 +139,7 @@ class UadpDiscoveryGoldenVectorTest {
   // region announcement vector
 
   /**
-   * §4 worked example: publisher Byte id 7, announcement sequence 12, DataSetWriterId 100, minimal
+   * Worked example: publisher Byte id 7, announcement sequence 12, DataSetWriterId 100, minimal
    * metadata (name "Demo", null arrays/fields, null DataSetClassId, ConfigurationVersion 1/1),
    * status Good, security None -- 72 bytes.
    */
@@ -274,7 +274,7 @@ class UadpDiscoveryGoldenVectorTest {
 
   // region helpers
 
-  /** The minimal metadata of the §4 worked example: name "Demo", ConfigurationVersion 1/1. */
+  /** The minimal metadata of the worked example: name "Demo", ConfigurationVersion 1/1. */
   private static DataSetMetaDataType demoMetaData() {
     return new DataSetMetaDataType(
         null,

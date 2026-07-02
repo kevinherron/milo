@@ -1177,20 +1177,20 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   /**
-   * Validate the conditions pinned to fail {@code startup()}: invalid message security
-   * configuration on enabled groups (K3, see {@link #messageSecurityConfigError}: secured
-   * JSON-mapped components, and secured components lacking a resolvable SecurityGroupRef, a
-   * supported policy, or a bound SecurityKeyProvider), missing transport or mapping providers for
-   * enabled components, missing sources for enabled writers, publisher-less connections with
-   * enabled writer groups, enabled readers on broker connections without a configured data
-   * queueName, enabled writer groups on UDP connections with a maxNetworkMessageSize above the Part
-   * 14 §7.3.2.1 limit of 65535, enabled writers whose keyFrameCount > 1 cannot be honored — JSON
-   * writers whose effective content masks cannot express delta frames, and UADP writers with a
-   * non-zero ConfiguredSize; both only when the group's mapping resolves to the built-in provider
-   * (see {@link #deltaFrameConfigError}) — and enabled UADP writer groups asking for emission
-   * features the built-in mapping does not implement: the group-level PromotedFields content-mask
-   * bit and the RawData field-content-mask bit of enabled writers, rejected with {@code
-   * Bad_NotSupported} (see {@link #unsupportedUadpFeatureError}).
+   * Validate the conditions that must fail {@code startup()}: invalid message security
+   * configuration on enabled groups (see {@link #messageSecurityConfigError}: secured JSON-mapped
+   * components, and secured components lacking a resolvable SecurityGroupRef, a supported policy,
+   * or a bound SecurityKeyProvider), missing transport or mapping providers for enabled components,
+   * missing sources for enabled writers, publisher-less connections with enabled writer groups,
+   * enabled readers on broker connections without a configured data queueName, enabled writer
+   * groups on UDP connections with a maxNetworkMessageSize above the Part 14 §7.3.2.1 limit of
+   * 65535, enabled writers whose keyFrameCount > 1 cannot be honored — JSON writers whose effective
+   * content masks cannot express delta frames, and UADP writers with a non-zero ConfiguredSize;
+   * both only when the group's mapping resolves to the built-in provider (see {@link
+   * #deltaFrameConfigError}) — and enabled UADP writer groups asking for emission features the
+   * built-in mapping does not implement: the group-level PromotedFields content-mask bit and the
+   * RawData field-content-mask bit of enabled writers, rejected with {@code Bad_NotSupported} (see
+   * {@link #unsupportedUadpFeatureError}).
    */
   private void validateStartup(PubSubConfig config) throws UaException {
     if (!config.isEnabled()) {
@@ -1313,13 +1313,13 @@ public final class PubSubServiceImpl implements PubSubService {
   /**
    * Validate the subset of the {@link #validateStartup} conditions that reconfiguration must also
    * enforce, because the runtime cannot degrade gracefully on them: invalid message security
-   * configuration on enabled groups (K3 enforces at startup <em>and</em> reconfigure), missing
-   * mapping providers for enabled components, enabled readers on broker connections without a
-   * configured data queueName, and enabled writer groups on UDP connections with a
-   * maxNetworkMessageSize above the Part 14 §7.3.2.1 limit of 65535. Throws {@link
-   * UaRuntimeException} with {@code Bad_ConfigurationError} (the reconfigure API has no
-   * checked-exception surface). Startup-only conditions with a graceful runtime degradation path
-   * (e.g. unbound sources, which surface as source errors) are not re-checked here.
+   * configuration on enabled groups (enforced at startup <em>and</em> reconfigure), missing mapping
+   * providers for enabled components, enabled readers on broker connections without a configured
+   * data queueName, and enabled writer groups on UDP connections with a maxNetworkMessageSize above
+   * the Part 14 §7.3.2.1 limit of 65535. Throws {@link UaRuntimeException} with {@code
+   * Bad_ConfigurationError} (the reconfigure API has no checked-exception surface). Startup-only
+   * conditions with a graceful runtime degradation path (e.g. unbound sources, which surface as
+   * source errors) are not re-checked here.
    *
    * <p>The delta-frame consistency check ({@link #deltaFrameConfigError}) is also enforced here,
    * even though the runtime degrades such writers safely to every-cycle key frames: a configuration
@@ -1563,13 +1563,13 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   /**
-   * The K3 message security configuration error of a writer group, or {@code null} when its
-   * effective security is valid: a secured JSON-mapped group is rejected outright — JSON
-   * NetworkMessages have <b>no</b> message security in OPC UA 1.05 (Part 14 §7.3.4.1) — and a
-   * secured UADP group requires a resolvable SecurityGroupRef, a supported security policy, a bound
-   * {@link SecurityKeyProvider}, and valid SecurityKeyServices entries (see {@link
+   * The message security configuration error of a writer group, or {@code null} when its effective
+   * security is valid: a secured JSON-mapped group is rejected outright — JSON NetworkMessages have
+   * <b>no</b> message security in OPC UA 1.05 (Part 14 §7.3.4.1) — and a secured UADP group
+   * requires a resolvable SecurityGroupRef, a supported security policy, a bound {@link
+   * SecurityKeyProvider}, and valid SecurityKeyServices entries (see {@link
    * #securedComponentSecurityError}). Enforced at startup, reconfigure, and group activation (the
-   * HG4 activation-backstop precedent); rejections use {@code Bad_ConfigurationError}.
+   * activation-time backstop precedent); rejections use {@code Bad_ConfigurationError}.
    *
    * <p>The JSON rule applies only when the "json" mapping resolves to the built-in provider: a
    * custom provider shadowing it owns its wire format and is treated like any custom mapping.
@@ -1591,7 +1591,7 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   /**
-   * The K3 message security configuration error of a reader group — the group's effective security
+   * The message security configuration error of a reader group — the group's effective security
    * plus every enabled reader's effective security (a reader-level override is active iff its mode
    * is not {@code Invalid}) — or {@code null} when valid. Same rows and status-code posture as the
    * writer-group overload; secured JSON-mapped readers are rejected naming BrokerSecurityConfig.
@@ -1623,12 +1623,12 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   /**
-   * The K3 message security configuration error of one dataset reader — its effective security
-   * after the root → group → reader-override inheritance — or {@code null} when valid: the
-   * per-reader rows of the reader-group overload. Also run from {@code
-   * DataSetReaderRuntime#activate}: the group-level checks only see enabled readers, so a reader
-   * enabled (or added by reconfigure) after its group activated is first validated there (the HG4
-   * activation-backstop precedent at reader granularity).
+   * The message security configuration error of one dataset reader — its effective security after
+   * the root → group → reader-override inheritance — or {@code null} when valid: the per-reader
+   * rows of the reader-group overload. Also run from {@code DataSetReaderRuntime#activate}: the
+   * group-level checks only see enabled readers, so a reader enabled (or added by reconfigure)
+   * after its group activated is first validated there (the activation-time backstop precedent at
+   * reader granularity).
    */
   @Nullable String dataSetReaderSecurityError(
       PubSubConfig config, ReaderGroupConfig group, DataSetReaderConfig reader, String readerPath) {
@@ -1646,7 +1646,7 @@ public final class PubSubServiceImpl implements PubSubService {
         readerSecurity, "dataset reader '%s'".formatted(readerPath));
   }
 
-  /** JSON has no message security in OPC UA 1.05 (K3 verbatim); point at broker security. */
+  /** JSON has no message security in OPC UA 1.05; point at broker security. */
   private static String jsonSecurityError(MessageSecurityMode mode, String component) {
     return ("MessageSecurityMode %s is not supported with JSON NetworkMessages: JSON has no"
             + " message security in OPC UA 1.05 (Part 14 §7.3.4.1); secure the broker transport"
@@ -1656,10 +1656,10 @@ public final class PubSubServiceImpl implements PubSubService {
 
   /**
    * The rows a secured (UADP or custom-mapped) component must satisfy: a resolvable
-   * SecurityGroupRef, a K2-supported effective policy URI (when one is configured; a null URI
-   * defers to the provider per K8), a bound {@link SecurityKeyProvider}, and — when
-   * SecurityKeyServices endpoints are configured — entries free of {@link
-   * SecurityKeyServiceValidator} errors (K9; warnings are logged, not fatal).
+   * SecurityGroupRef, a supported effective policy URI (when one is configured; a null URI defers
+   * to the provider), a bound {@link SecurityKeyProvider}, and — when SecurityKeyServices endpoints
+   * are configured — entries free of {@link SecurityKeyServiceValidator} errors (warnings are
+   * logged, not fatal).
    */
   private @Nullable String securedComponentSecurityError(
       EffectiveMessageSecurity security, String component) {

@@ -38,7 +38,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Server-side key store backing the SKS face of {@link ServerPubSub}: generates, rotates, and
  * serves the security keys of the SecurityGroups configured on the attached PubSub configuration
- * (OPC UA Part 14 §8.3.2 GetSecurityKeys semantics; K15).
+ * (OPC UA Part 14 §8.3.2 GetSecurityKeys semantics).
  *
  * <p>One {@link GroupKeyState} exists per {@link SecurityGroupConfig} present at construction;
  * groups added by later reconfiguration are not picked up (a documented v1 limitation matching the

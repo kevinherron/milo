@@ -69,7 +69,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The Part 14 §9.1.3.7.6 {@code CloseAndUpdate} element-operation matrix, driven end-to-end by a
- * real {@link OpcUaClient} {@code Call} — pins R4/R7/R8/R11 and the CloseAndUpdate gap doc.
+ * real {@link OpcUaClient} {@code Call}.
  *
  * <p>Two groups:
  *
@@ -419,7 +419,7 @@ class CloseAndUpdateClientCallTest {
                 true,
                 ref(mask(Field.ElementAdd, Field.ReferenceSecurityGroup), 0, 0, 0));
 
-        // pin R7: bit-11 SecurityGroup refs are allowed only with checkSksAdmin (granted here)
+        // bit-11 SecurityGroup refs are allowed only with checkSksAdmin (granted here)
         assertTrue(changesApplied(result));
         assertTrue(referencesResults(result)[0].isGood());
       } finally {
@@ -441,7 +441,7 @@ class CloseAndUpdateClientCallTest {
                 false,
                 ref(mask(Field.ElementAdd, Field.ReferencePushTarget), 0, 0, 0));
 
-        // pin R7: bit-12 PushTarget refs are a per-element rejection, never a method-level failure
+        // bit-12 PushTarget refs are a per-element rejection, never a method-level failure
         assertTrue(result.getStatusCode().isGood());
         assertEquals(StatusCodes.Bad_InvalidArgument, referencesResults(result)[0].getValue());
       } finally {
@@ -468,7 +468,7 @@ class CloseAndUpdateClientCallTest {
                 ref(mask(Field.ElementAdd, Field.ReferenceConnection), 0, 0, 0));
 
         assertTrue(changesApplied(result));
-        // pin R8: a successful mutating CloseAndUpdate saves through the store
+        // a successful mutating CloseAndUpdate saves through the store
         assertTrue(store.saved.size() > savesAfterAttach);
       } finally {
         client.disconnect();

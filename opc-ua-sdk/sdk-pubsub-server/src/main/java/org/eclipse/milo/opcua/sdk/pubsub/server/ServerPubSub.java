@@ -117,12 +117,12 @@ public final class ServerPubSub implements AutoCloseable {
 
   /**
    * Serializes the fragment's startup and shutdown so they cannot interleave, and records whether a
-   * start was attempted and whether shutdown was requested. Fixes the Phase 2 {@code
-   * fragmentStarted} CAS-vs-close race: with the two prior {@link AtomicBoolean}s, {@code
-   * fragmentStarted} was set before {@code fragment.startup()} finished, so a concurrent {@link
-   * #shutdown()} could run {@code fragment.shutdown()} while startup was still building nodes (or
-   * before it had reached RUNNING), and a {@link #shutdown()} that ran before {@link #startup()}
-   * left nothing to stop a later start.
+   * start was attempted and whether shutdown was requested. Fixes the {@code fragmentStarted}
+   * CAS-vs-close race: with the two prior {@link AtomicBoolean}s, {@code fragmentStarted} was set
+   * before {@code fragment.startup()} finished, so a concurrent {@link #shutdown()} could run
+   * {@code fragment.shutdown()} while startup was still building nodes (or before it had reached
+   * RUNNING), and a {@link #shutdown()} that ran before {@link #startup()} left nothing to stop a
+   * later start.
    */
   private final Object fragmentLifecycleLock = new Object();
 
@@ -166,7 +166,7 @@ public final class ServerPubSub implements AutoCloseable {
 
     this.service = PubSubService.create(config, bindings, serviceConfig);
 
-    // pin R17: bridge PubSub state changes and send failures to OPC UA events, gated separately
+    // bridge PubSub state changes and send failures to OPC UA events, gated separately
     // from diagnosticsEnabled and independent of the exposed information model
     this.statusEventBridge =
         options.isStatusEventsEnabled() ? new PubSubStatusEventBridge(server, service) : null;
@@ -188,7 +188,7 @@ public final class ServerPubSub implements AutoCloseable {
             ? new PubSubInfoModelFragment(server, config, service, options)
             : null;
 
-    // pin R10: after a CloseAndUpdate applies a configuration change, the information-model
+    // after a CloseAndUpdate applies a configuration change, the information-model
     // fragment (if exposed) rebuilds the affected config-derived subtrees so the model tracks the
     // new configuration; with no exposed fragment there is nothing to rebuild (NO_OP)
     this.remoteConfigurationServer =
@@ -206,21 +206,20 @@ public final class ServerPubSub implements AutoCloseable {
 
   /**
    * Initialize the Mandatory FileType properties on {@code i=25451} at attach time when remote
-   * configuration is disabled (pin R3; FileType-contract open question 9). The ns0 loader ships
-   * {@code Writable}/{@code UserWritable}/{@code OpenCount}/{@code Size} as {@code NULL}; with no
-   * {@link RemoteConfigurationServer} to populate them, a client reading them would otherwise see
-   * {@code null}. The file cannot be opened (for read or write), so {@code Writable}/{@code
-   * UserWritable} are {@code false} and {@code OpenCount} is {@code 0}.
+   * configuration is disabled. The ns0 loader ships {@code Writable}/{@code UserWritable}/{@code
+   * OpenCount}/{@code Size} as {@code NULL}; with no {@link RemoteConfigurationServer} to populate
+   * them, a client reading them would otherwise see {@code null}. The file cannot be opened (for
+   * read or write), so {@code Writable}/{@code UserWritable} are {@code false} and {@code
+   * OpenCount} is {@code 0}.
    *
    * <p>{@code Size} is reported as {@code 0}: with remote configuration disabled the virtual file
-   * can never be opened, so no read snapshot exists, and FileType-contract open question 4 permits
-   * {@code 0} while no handle is open. The configuration is deliberately NOT serialized here to
-   * derive a size. A configuration that is legal for a locally-configured server need not be
-   * serializable to {@link
-   * org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType} — for example
-   * a {@code FieldNameSelector} TargetVariable resolves against runtime metadata but cannot be
-   * mapped to a DataSetFieldId without configured DataSetMetaData — so serializing at attach would
-   * reject configurations that the runtime otherwise accepts.
+   * can never be opened, so no read snapshot exists, and the FileType contract permits {@code 0}
+   * while no handle is open. The configuration is deliberately NOT serialized here to derive a
+   * size. A configuration that is legal for a locally-configured server need not be serializable to
+   * {@link org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType} — for
+   * example a {@code FieldNameSelector} TargetVariable resolves against runtime metadata but cannot
+   * be mapped to a DataSetFieldId without configured DataSetMetaData — so serializing at attach
+   * would reject configurations that the runtime otherwise accepts.
    */
   private static void initializeFileTypePropertiesForDisabledRemoteConfig(OpcUaServer server) {
 
@@ -408,10 +407,10 @@ public final class ServerPubSub implements AutoCloseable {
   }
 
   /**
-   * The R10 rebuild hand-off: delegates a {@code CloseAndUpdate} reconfigure to the
-   * information-model fragment when one is exposed, or {@link RemoteConfigurationListener#NO_OP}
-   * otherwise. Taking the fragment as a parameter (rather than capturing the field) narrows its
-   * nullness for the lambda.
+   * The rebuild hand-off: delegates a {@code CloseAndUpdate} reconfigure to the information-model
+   * fragment when one is exposed, or {@link RemoteConfigurationListener#NO_OP} otherwise. Taking
+   * the fragment as a parameter (rather than capturing the field) narrows its nullness for the
+   * lambda.
    */
   private static RemoteConfigurationListener reconfigureListenerFor(
       @Nullable PubSubInfoModelFragment fragment) {
@@ -477,15 +476,14 @@ public final class ServerPubSub implements AutoCloseable {
   }
 
   /**
-   * Reconfigure the runtime and rebuild the exposed information model to match (pin R10).
+   * Reconfigure the runtime and rebuild the exposed information model to match.
    *
    * <p>Equivalent to {@link PubSubService#reconfigure} on {@link #runtime()}, except that when the
    * information model is exposed ({@link ServerPubSubOptions#isExposeInformationModel()}) the
    * config-derived subtrees are reconciled to {@code newConfig} afterward so they do not desync
    * from the configuration. Like {@code runtime().reconfigure}, this does not re-derive automatic
    * address-space bindings or TargetVariables writers and does not persist through a configured
-   * {@link PubSubConfigurationStore} (only the remote-configuration file model persists, per pin
-   * R8).
+   * {@link PubSubConfigurationStore} (only the remote-configuration file model persists).
    *
    * @param newConfig the new {@link PubSubConfig}.
    * @param mode the {@link PubSubService.ReconfigureMode} governing how affected components

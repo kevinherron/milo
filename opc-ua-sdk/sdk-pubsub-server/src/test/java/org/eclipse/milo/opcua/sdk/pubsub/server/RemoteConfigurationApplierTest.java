@@ -32,9 +32,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.SecurityGroupDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.WriterGroupDataType;
 import org.junit.jupiter.api.Test;
 
-/**
- * The CloseAndUpdate element-op matrix at unit level ({@link RemoteConfigurationApplier}, pin R4).
- */
+/** The CloseAndUpdate element-op matrix at unit level ({@link RemoteConfigurationApplier}). */
 class RemoteConfigurationApplierTest {
 
   private static final ULong DEFAULT_PUBLISHER_ID = ulong(0x1122334455667788L);

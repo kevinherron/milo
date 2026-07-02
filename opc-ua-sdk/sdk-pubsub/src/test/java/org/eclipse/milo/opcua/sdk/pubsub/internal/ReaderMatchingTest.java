@@ -705,7 +705,7 @@ class ReaderMatchingTest {
    * (Part 14 §7.2.4.4.4); a chunk the reassembler cannot key or parse — here one without the
    * PayloadHeader that carries the chunk's DataSetWriterId, and truncated chunk fields — still
    * ticks connection decodeErrors, now with {@code Bad_DecodingError} (chunked input stopped being
-   * {@code Bad_NotSupported} when reassembly was wired in Phase 4).
+   * {@code Bad_NotSupported} when reassembly was wired in).
    */
   @Test
   void malformedChunkedNetworkMessageTicksConnectionDecodeErrors() throws Exception {

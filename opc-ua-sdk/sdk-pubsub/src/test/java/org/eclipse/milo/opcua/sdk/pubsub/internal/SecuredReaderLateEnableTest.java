@@ -82,12 +82,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * A DataSetReader that is disabled at startup and enabled at runtime, whose K9 security override
+ * A DataSetReader that is disabled at startup and enabled at runtime, whose security override
  * selects a SecurityGroup its (unsecured) group never registered: enabling the reader must register
- * that SecurityGroupRef with the key manager (K6 fetch-at-startup, applied from the reader's
- * activate hook) so its keys are fetched and matching secured traffic decodes — without the
- * registration the ref would never fetch and every message would silently drop as unknown-token
- * forever.
+ * that SecurityGroupRef with the key manager (fetch-at-startup, applied from the reader's activate
+ * hook) so its keys are fetched and matching secured traffic decodes — without the registration the
+ * ref would never fetch and every message would silently drop as unknown-token forever.
  */
 class SecuredReaderLateEnableTest {
 

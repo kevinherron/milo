@@ -419,8 +419,8 @@ public final class PubSubConfig {
     /**
      * The wire id of a SecurityGroup ({@link SecurityGroupConfig#getSecurityGroupId()}) identifies
      * it to the Security Key Service and on the mapper's wire shape, so it must be unique across
-     * the SecurityGroups of one configuration (the Phase 0 wire-id uniqueness posture; Part 14
-     * §8.3.2: "It shall be unique within the Security Key Service."). Empty ids are exempt.
+     * the SecurityGroups of one configuration (Part 14 §8.3.2: "It shall be unique within the
+     * Security Key Service."). Empty ids are exempt.
      */
     private static void checkUniqueSecurityGroupIds(List<SecurityGroupConfig> securityGroups) {
       Map<String, String> idToName = new HashMap<>();

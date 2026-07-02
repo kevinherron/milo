@@ -132,7 +132,7 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
   /**
    * The reader's effective message security after the Part 14 root → group → reader-override
    * inheritance, resolved against the config generation this runtime was built from (reconfigure
-   * recreates the runtime). Consumed by the K7 mode gate and the connection's {@link
+   * recreates the runtime). Consumed by the mode gate and the connection's {@link
    * ReaderSecurityResolver}.
    */
   EffectiveMessageSecurity effectiveSecurity() {
@@ -180,11 +180,11 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
       throw e;
     }
 
-    // the K3 validation at reader granularity: group-level startup/reconfigure/activation checks
-    // only see enabled readers, so a reader enabled after its group activated is first checked
-    // here (the HG4 activation-backstop precedent) — a secured JSON-mapped reader, or a secured
-    // override without a resolvable SecurityGroupRef/supported policy/bound provider, fails into
-    // Error instead of running
+    // the message security validation at reader granularity: group-level
+    // startup/reconfigure/activation checks only see enabled readers, so a reader enabled after
+    // its group activated is first checked here (the activation-time backstop precedent) — a
+    // secured JSON-mapped reader, or a secured override without a resolvable
+    // SecurityGroupRef/supported policy/bound provider, fails into Error instead of running
     String securityError =
         service.dataSetReaderSecurityError(service.getConfig(), group.config(), config, path());
     if (securityError != null) {

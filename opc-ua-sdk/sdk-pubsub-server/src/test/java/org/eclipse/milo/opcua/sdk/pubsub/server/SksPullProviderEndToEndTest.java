@@ -59,8 +59,8 @@ import org.junit.jupiter.api.Test;
  * (test-trusting) certificate posture, an Anonymous identity — then {@code GetSecurityKeys} (ns0
  * {@code i=15215}) on the resolved SignAndEncrypt session.
  *
- * <p>Covers the K20/WP-T4 pull rows: a fetch whose {@link SecurityKeySet} matches the server-side
- * {@link SecurityGroupKeyStore} (policy URI, FirstTokenId, key material and sizes,
+ * <p>Covers the pull scenarios: a fetch whose {@link SecurityKeySet} matches the server-side {@link
+ * SecurityGroupKeyStore} (policy URI, FirstTokenId, key material and sizes,
  * TimeToNextKey/KeyLifetime), session caching across repeated fetches, and re-resolution after a
  * server-side session failure.
  */

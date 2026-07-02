@@ -26,7 +26,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UByte;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.junit.jupiter.api.Test;
 
-/** State-machine tests for {@link FileHandleManager} (Phase 5 pins R2/R3). */
+/** State-machine tests for {@link FileHandleManager}. */
 class FileHandleManagerTest {
 
   private static final UByte READ = ubyte(0x01);

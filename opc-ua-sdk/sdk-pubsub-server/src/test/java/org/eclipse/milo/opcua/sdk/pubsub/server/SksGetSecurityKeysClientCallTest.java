@@ -43,16 +43,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * The client-driven {@code GetSecurityKeys} authorization matrix (K17, Part 14 §8.3.2 / §9.1.3.3):
- * every row is a REAL {@code Call} from a connected {@link OpcUaClient} over a real secure channel,
- * not a directly constructed session, so the full server-side chain runs — ns0 {@code i=15215}
- * {@code AccessRestrictions(3)} enforcement in the access controller (the K17.1 status-propagation
- * fix) ahead of the handler's own channel-mode and {@link PubSubMethodAuthorizer} checks.
+ * The client-driven {@code GetSecurityKeys} authorization matrix (Part 14 §8.3.2 / §9.1.3.3): every
+ * row is a REAL {@code Call} from a connected {@link OpcUaClient} over a real secure channel, not a
+ * directly constructed session, so the full server-side chain runs — ns0 {@code i=15215} {@code
+ * AccessRestrictions(3)} enforcement in the access controller (the status-propagation fix) ahead of
+ * the handler's own channel-mode and {@link PubSubMethodAuthorizer} checks.
  *
  * <p>The channel-mode rows pin the status code observed on the wire: over {@code None} and {@code
- * Sign} channels the controller's AccessRestrictions denial fires first and, per K17.1, must
- * surface as {@code Bad_SecurityModeInsufficient} (not collapse to {@code Bad_UserAccessDenied});
- * the handler's belt-and-suspenders re-check yields the same code and is unit-covered in {@link
+ * Sign} channels the controller's AccessRestrictions denial fires first and must surface as {@code
+ * Bad_SecurityModeInsufficient} (not collapse to {@code Bad_UserAccessDenied}); the handler's
+ * belt-and-suspenders re-check yields the same code and is unit-covered in {@link
  * GetSecurityKeysMethodImplTest}.
  *
  * <p>Two started fixture servers cover the default-posture split: no {@code RoleMapper} configured
@@ -185,7 +185,7 @@ class SksGetSecurityKeysClientCallTest {
       try {
         CallMethodResult result = callGetSecurityKeys(client, "GroupA");
 
-        // the pinned code, not a collapsed Bad_UserAccessDenied (K17.1)
+        // the specific code, not a collapsed Bad_UserAccessDenied
         assertEquals(StatusCodes.Bad_SecurityModeInsufficient, result.getStatusCode().getValue());
       } finally {
         client.disconnect();

@@ -37,8 +37,8 @@ import org.jspecify.annotations.Nullable;
  * actually produce — {@code Anonymous}, or {@code UserName} backed by a Part 12 KeyCredential
  * record looked up by {@code ResourceUri == SKS ApplicationUri}.
  *
- * <p>Non-intersection rule (pinned): configured token types are tried in listed order; if none can
- * be satisfied the resolution is empty and the caller fails the entry — the provider never silently
+ * <p>Non-intersection rule: configured token types are tried in listed order; if none can be
+ * satisfied the resolution is empty and the caller fails the entry — the provider never silently
  * downgrades to a token type the configuration did not list.
  */
 final class SksIdentityResolver {

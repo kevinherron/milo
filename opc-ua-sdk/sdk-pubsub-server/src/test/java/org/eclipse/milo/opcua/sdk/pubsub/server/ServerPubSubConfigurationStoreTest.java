@@ -27,9 +27,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link PubSubConfigurationStore} precedence per pinned decision S7: a non-null {@code load()}
- * result wins over the attach configuration; a null {@code load()} result means the attach
- * configuration is used and saved exactly once; {@code save()} failures are non-fatal.
+ * {@link PubSubConfigurationStore} precedence: a non-null {@code load()} result wins over the
+ * attach configuration; a null {@code load()} result means the attach configuration is used and
+ * saved exactly once; {@code save()} failures are non-fatal.
  */
 class ServerPubSubConfigurationStoreTest {
 

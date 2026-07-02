@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link PubSubSecurityPolicy}: the Part 14 §7.2.4.4.3 parameter table asserted literally — URIs,
  * key part lengths (Table 155), nonce lengths (Tables 156/157), and signature length — so any
- * regression against the pinned K1 table fails here byte-count by byte-count.
+ * regression against the expected algorithm table fails here byte-count by byte-count.
  */
 class PubSubSecurityPolicyTest {
 
@@ -56,7 +56,7 @@ class PubSubSecurityPolicyTest {
 
   @Test
   void encryptionAlgorithmsResolveToAesCtrTransformations() {
-    // The K1 pin includes the stack-core SecurityAlgorithm additions the table points at.
+    // The parameter table includes the stack-core SecurityAlgorithm additions it points at.
     assertEquals(
         "http://opcfoundation.org/UA/security/aes128-ctr", SecurityAlgorithm.Aes128Ctr.getUri());
     assertEquals(
@@ -75,7 +75,7 @@ class PubSubSecurityPolicyTest {
 
   @Test
   void fromUriIsEmptyForUnsupportedUris() {
-    // Non-exceptional miss (the K8 fetch-failure path), including client/server policies.
+    // Non-exceptional miss (the fetch-failure path), including client/server policies.
     assertTrue(
         PubSubSecurityPolicy.fromUri("http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256")
             .isEmpty());
@@ -89,8 +89,8 @@ class PubSubSecurityPolicyTest {
 
   @Test
   void exactlyTheTwoK2PoliciesAreDefined() {
-    // K2 ships the full subset: both policies, nothing else. A new constant must revisit the
-    // parameter-table assumptions pinned across the security tests.
+    // The enum ships the full subset: both policies, nothing else. A new constant must
+    // revisit the parameter-table assumptions pinned across the security tests.
     assertEquals(2, PubSubSecurityPolicy.values().length);
   }
 }

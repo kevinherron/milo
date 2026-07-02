@@ -30,7 +30,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.CallMethodResult;
 import org.junit.jupiter.api.Test;
 
 /**
- * Client-driven authorization posture for the remote-configuration file model (pin R9): {@link
+ * Client-driven authorization posture for the remote-configuration file model: {@link
  * PubSubMethodAuthorizer#checkConfigure} governs every FileType method, mapping a {@code DENY} to
  * {@code Bad_UserAccessDenied} on the wire.
  *

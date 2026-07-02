@@ -306,11 +306,11 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
   }
 
   /**
-   * Re-run the K3 message security validation at activation (the HG4 activation-backstop
-   * precedent): a secured JSON-mapped group, or a secured group without a resolvable
-   * SecurityGroupRef, a supported policy, or a bound SecurityKeyProvider, fails into {@code
-   * PubSubState.Error} with {@code Bad_ConfigurationError}. Startup/reconfigure validation only
-   * sees enabled components, so this closes the disabled-at-startup-then-enabled gap.
+   * Re-run the message security validation at activation (the activation-time backstop precedent):
+   * a secured JSON-mapped group, or a secured group without a resolvable SecurityGroupRef, a
+   * supported policy, or a bound SecurityKeyProvider, fails into {@code PubSubState.Error} with
+   * {@code Bad_ConfigurationError}. Startup/reconfigure validation only sees enabled components, so
+   * this closes the disabled-at-startup-then-enabled gap.
    */
   private void checkMessageSecurity() throws UaException {
     String error = service.messageSecurityConfigError(service.getConfig(), config, path());
@@ -613,16 +613,16 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
       String message = "failed to encode NetworkMessage: " + e.getMessage();
       if (securityContext != null) {
         // encryption, signing, and nonce composition are inline with the encode of a secured
-        // NetworkMessage: a secured encode failure counts as an encryption error (K6), the WG
+        // NetworkMessage: a secured encode failure counts as an encryption error, the WG
         // counter closest to the failure (not additionally as a FailedTransmission)
         service.getDiagnostics().encryptionError(path(), statusCode, message, e);
       } else {
         // a plaintext encode failure is a NetworkMessage that never transmitted
-        // (R14/FailedTransmissions)
+        // (FailedTransmissions)
         service.getDiagnostics().failedTransmission(path(), statusCode, message, e);
       }
       // every DataSetMessage this partition would have carried was never sent: attribute a
-      // FailedDataSetMessage to each contributing writer (Part 14 Table 328, R14)
+      // FailedDataSetMessage to each contributing writer (Part 14 Table 328)
       recordFailedDataSetMessages(partition);
       // nothing of this partition was transmitted
       invalidateDeltaBaselines(partition, List.of(), notTransmitted);
@@ -945,7 +945,7 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
 
   /**
    * Attribute a {@code FailedDataSetMessage} to every writer that contributed a DataSetMessage to a
-   * partition whose NetworkMessage was never sent (encode failure), per Part 14 Table 328 (R14).
+   * partition whose NetworkMessage was never sent (encode failure), per Part 14 Table 328.
    */
   private void recordFailedDataSetMessages(Partition partition) {
     for (DataSetWriterRuntime contributor : partition.contributors) {

@@ -54,9 +54,9 @@ import org.jspecify.annotations.Nullable;
  * PubSub configuration, producing a candidate {@link PubSubConfiguration2DataType} plus the
  * full-length per-reference results, the assigned {@code ConfigurationValues} and the {@code
  * ConfigurationObjects} NodeIds (OPC UA Part 14 §9.1.3.7.6, element-op rules per §9.1.3.7.2 Table
- * 239 — the authoritative closeandupdate gap analysis).
+ * 239).
  *
- * <p>Element-op semantics (WP-X pin R4):
+ * <p>Element-op semantics:
  *
  * <ul>
  *   <li>Exactly five operation-bit rows are valid: Add, Match, Add+Match, Modify, Remove. Every

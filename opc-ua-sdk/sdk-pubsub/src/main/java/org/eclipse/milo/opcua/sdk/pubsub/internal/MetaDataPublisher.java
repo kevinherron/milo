@@ -64,7 +64,7 @@ import org.slf4j.LoggerFactory;
  * connect (broker channels fail fast until connected). After the bounded retries are exhausted the
  * periodic task and the reconfigure on-change check remain as retry opportunities; a broker
  * reconnect additionally republishes retained metadata because the transport reports it (Part 14
- * R16 {@code TransportStateListener}), which recovers the connection to {@code Operational} and
+ * {@code TransportStateListener}), which recovers the connection to {@code Operational} and
  * re-activates its writers — and {@link #onWriterActivated} publishes on every activation.
  *
  * <p>Sequence numbers come from the service's per-PublisherId announcement counter (Part 14
@@ -296,7 +296,7 @@ final class MetaDataPublisher {
 
     try {
       CompletableFuture<Void> sendFuture = channel.send(encoded.data(), address);
-      // hand-off convention (R14): count the metadata NetworkMessage as sent when it is handed to
+      // hand-off convention: count the metadata NetworkMessage as sent when it is handed to
       // the channel, matching WriterGroupRuntime, rather than only on async success
       service.getDiagnostics().networkMessageSent(connection.path());
       sendFuture.whenComplete(
@@ -324,9 +324,8 @@ final class MetaDataPublisher {
    * Record a metadata send failure and schedule a retry, unless the connection's publisher channel
    * is no longer {@code channel} — i.e. it was closed on a clean shutdown, disable, or
    * reconfigure-removal, in which case the failure is channel-teardown noise and no diagnostics
-   * error is recorded and no retry is scheduled (Phase 5 send-failure cleanup). The recorded status
-   * is the transport's real status (un-flattened), or {@code Bad_CommunicationError} as the
-   * default.
+   * error is recorded and no retry is scheduled. The recorded status is the transport's real status
+   * (un-flattened), or {@code Bad_CommunicationError} as the default.
    */
   private void recordSendFailure(
       WriterGroupRuntime group,

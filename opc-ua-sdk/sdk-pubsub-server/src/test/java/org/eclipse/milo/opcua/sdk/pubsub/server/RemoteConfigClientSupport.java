@@ -35,7 +35,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.CallMethodResult;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 
 /**
- * Shared helpers for the client-driven WP-T5a remote-configuration tests: connect a real {@link
+ * Shared helpers for the client-driven remote-configuration tests: connect a real {@link
  * OpcUaClient} to the {@link TestSksServer} fixture over its {@code None} endpoint and call the ns0
  * {@code PublishSubscribe/PubSubConfiguration} FileType methods ({@code i=25451}) through the real
  * {@code Call} service.

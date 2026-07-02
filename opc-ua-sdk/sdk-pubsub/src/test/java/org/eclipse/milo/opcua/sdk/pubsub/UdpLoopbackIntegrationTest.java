@@ -427,7 +427,7 @@ class UdpLoopbackIntegrationTest {
   }
 
   /**
-   * K3: a secured group requires a resolvable SecurityGroupRef (plus a supported policy and a bound
+   * A secured group requires a resolvable SecurityGroupRef (plus a supported policy and a bound
    * SecurityKeyProvider); mode Sign without one is a configuration error, not an unsupported
    * feature.
    */

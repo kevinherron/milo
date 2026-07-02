@@ -50,7 +50,7 @@ class DiscoveryAddressConfigTest {
   private static final String PROFILE_UDP_UADP =
       "http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp";
 
-  /** The Phase 0/1 emission for a UDP connection with no transport settings to express. */
+  /** The canonical emission for a UDP connection with no transport settings to express. */
   private static final DatagramConnectionTransportDataType CANONICAL_EMPTY_TRANSPORT =
       new DatagramConnectionTransportDataType(new NetworkAddressUrlDataType(null, null));
 
@@ -218,7 +218,7 @@ class DiscoveryAddressConfigTest {
     ConnectionTransportDataType transportSettings = emittedTransportSettings(config);
 
     assertEquals(CANONICAL_EMPTY_TRANSPORT, transportSettings);
-    // Byte-equal to the Phase 0/1 emission, not merely structurally similar.
+    // Byte-equal to the canonical emission, not merely structurally similar.
     assertEquals(encode(CANONICAL_EMPTY_TRANSPORT), encode(transportSettings));
   }
 

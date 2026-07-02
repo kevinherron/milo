@@ -56,7 +56,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end R12 (Part 14 §9.1.11.3 / Table 311) state-counter attribution driven through the real
+ * End-to-end (Part 14 §9.1.11.3 / Table 311) state-counter attribution driven through the real
  * engine: {@link DiagnosticsCollectorTest} pins the collector arithmetic with synthetic {@code
  * recordStateChange} calls, while this test drives genuine transitions — startup, a Method
  * Disable/Enable of a group with its writer child cascading by parent, and subtree disposal on
@@ -255,7 +255,7 @@ class StateCounterAttributionEngineTest {
 
     // re-enable by Method: the group's final Operational hop is attributed to Method (its
     // remembered
-    // trigger), while its writer child comes back by the parent cascade — the R12 ByMethod/ByParent
+    // trigger), while its writer child comes back by the parent cascade — the ByMethod/ByParent
     // split on the final hop
     service.enable(group);
     flushTransport();

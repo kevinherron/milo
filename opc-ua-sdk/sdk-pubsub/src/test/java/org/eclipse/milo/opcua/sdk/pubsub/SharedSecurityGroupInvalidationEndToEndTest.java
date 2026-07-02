@@ -58,14 +58,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end R7 (Part 14 §6.2.12.2) key invalidation driven through {@link
+ * End-to-end (Part 14 §6.2.12.2) key invalidation driven through {@link
  * PubSubService#invalidateSecurityKeys(SecurityGroupRef)} — the exact call {@code
  * RemoteConfigurationServer} makes after a {@code CloseAndUpdate} changes a SecurityGroup's {@code
  * SecurityPolicyUri} or {@code KeyLifetime}. The scenario is the one the {@code DISABLE_AFFECTED}
- * reconfigure alone misses (documented in the WP-Z-r7 notes): a SINGLE SecurityGroup shared by TWO
- * concurrently-running secured writer groups. Because the two groups restart one-at-a-time, the
- * shared key state never loses all consumers at once and is never disposed, so its window survives;
- * only the explicit invalidate drops it deterministically for both consumers.
+ * reconfigure alone misses: a SINGLE SecurityGroup shared by TWO concurrently-running secured
+ * writer groups. Because the two groups restart one-at-a-time, the shared key state never loses all
+ * consumers at once and is never disposed, so its window survives; only the explicit invalidate
+ * drops it deterministically for both consumers.
  *
  * <p>{@code SecurityGroupInvalidationTest} (server package) pins which SecurityGroup edits trigger
  * the invalidate, and {@code SecurityKeyManagerTest} pins the manager drop/re-fetch in isolation.

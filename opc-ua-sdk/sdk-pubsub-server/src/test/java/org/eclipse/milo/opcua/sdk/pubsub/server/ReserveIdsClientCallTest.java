@@ -36,8 +36,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The Part 14 §9.1.3.7.5 {@code ReserveIds} method driven end-to-end by a real {@link OpcUaClient}
- * {@code Call} — pin R5. {@link ReserveIdRegistryTest} unit-tests the allocator; this class runs it
- * through the wire, so the per-{@link org.eclipse.milo.opcua.sdk.server.Session} keying, the
+ * {@code Call}. {@link ReserveIdRegistryTest} unit-tests the allocator; this class runs it through
+ * the wire, so the per-{@link org.eclipse.milo.opcua.sdk.server.Session} keying, the
  * transport-profile default PublisherId typing that returns over the wire as a {@code BaseDataType}
  * out-argument, and the {@code SessionListener} release-on-close all exercise the real session
  * path.
@@ -154,7 +154,7 @@ class ReserveIdsClientCallTest {
         UShort[] aIds = (UShort[]) reserve(a, UDP_UADP, 4, 0).getOutputArguments()[1].getValue();
         UShort[] bIds = (UShort[]) reserve(b, UDP_UADP, 4, 0).getOutputArguments()[1].getValue();
 
-        // uniqueness spans all outstanding reservations from every session (pin R5)
+        // uniqueness spans all outstanding reservations from every session
         Set<Integer> seen = new HashSet<>();
         Arrays.stream(aIds).forEach(id -> seen.add(id.intValue()));
         for (UShort id : bIds) {
@@ -233,7 +233,7 @@ class ReserveIdsClientCallTest {
     try {
       OpcUaClient client = connect(sks);
       try {
-        // pin R9 / §9.1.3.7.5: an unauthorized caller is Bad_UserAccessDenied
+        // §9.1.3.7.5: an unauthorized caller is Bad_UserAccessDenied
         CallMethodResult result = reserve(client, UDP_UADP, 1, 0);
         assertEquals(StatusCodes.Bad_UserAccessDenied, result.getStatusCode().getValue());
       } finally {

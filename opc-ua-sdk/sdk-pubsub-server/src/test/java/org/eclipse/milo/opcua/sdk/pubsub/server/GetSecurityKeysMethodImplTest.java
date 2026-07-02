@@ -51,13 +51,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link GetSecurityKeysMethodImpl} check order and result codes (Part 14 §8.3.2, K17): channel
- * mode before authorization before existence, exercised through the public {@code
+ * {@link GetSecurityKeysMethodImpl} check order and result codes (Part 14 §8.3.2): channel mode
+ * before authorization before existence, exercised through the public {@code
  * AbstractMethodInvocationHandler.invoke(AccessContext, CallMethodRequest)} entry so argument
  * validation and status-code mapping run exactly as they do for a client Call.
  *
- * <p>The client-driven end-to-end (a real Call over a SignAndEncrypt channel) is WP-T4 scope; these
- * tests bind sessions directly.
+ * <p>The client-driven end-to-end (a real Call over a SignAndEncrypt channel) is covered
+ * separately; these tests bind sessions directly.
  */
 class GetSecurityKeysMethodImplTest {
 

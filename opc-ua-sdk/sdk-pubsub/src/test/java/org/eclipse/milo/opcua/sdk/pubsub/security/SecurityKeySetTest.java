@@ -65,7 +65,7 @@ class SecurityKeySetTest {
   @Test
   void arbitraryPolicyUriIsAccepted() {
     // The carrier does not gate on supported policies: an unsupported provider URI is the
-    // key manager's K8 fetch-failure path, not a construction failure.
+    // key manager's fetch-failure path, not a construction failure.
     SecurityKeySet keySet =
         new SecurityKeySet(
             "urn:some:future:policy", uint(1), List.of(KEY), Duration.ZERO, Duration.ZERO);

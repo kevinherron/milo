@@ -248,7 +248,7 @@ final class DiagnosticsCollector implements PubSubDiagnostics {
       case Paused -> counters.add(Counter.STATE_PAUSED_BY_PARENT, 1);
       case Disabled -> {
         // a Disabled transition from subtree disposal (reconfigure-removal/shutdown) is not a
-        // Disable Method call (Part 14 §9.1.11 Q2 pin)
+        // Disable Method call (Part 14 §9.1.11)
         if (cause == Cause.METHOD) {
           counters.add(Counter.STATE_DISABLED_BY_METHOD, 1);
         }

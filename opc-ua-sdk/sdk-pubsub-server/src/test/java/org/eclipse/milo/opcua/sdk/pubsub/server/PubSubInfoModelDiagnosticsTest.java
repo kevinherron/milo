@@ -81,11 +81,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * WP-Z-diag: the Part 14 §9.1.11 diagnostics exposure (pins R13/R14/R15/R18) and the §9.1.9
- * PubSubCapabilities population (pin R20) in {@link PubSubInfoModelFragment}. Verifies the ns0 root
- * ({@code i=17409}) and PubSubCapabilities ({@code i=23678}) backing, the fragment-minted
- * per-component Diagnostics objects, live counter/count values, the Reset method round-trip and
- * authorization, ResolvedAddress, and rebuild-on-reconfigure.
+ * The Part 14 §9.1.11 diagnostics exposure and the §9.1.9 PubSubCapabilities population in {@link
+ * PubSubInfoModelFragment}. Verifies the ns0 root ({@code i=17409}) and PubSubCapabilities ({@code
+ * i=23678}) backing, the fragment-minted per-component Diagnostics objects, live counter/count
+ * values, the Reset method round-trip and authorization, ResolvedAddress, and
+ * rebuild-on-reconfigure.
  *
  * <p>Diagnostics is gated on both {@link ServerPubSubOptions#isExposeInformationModel()} and {@link
  * ServerPubSubOptions#isDiagnosticsEnabled()}; the per-component Diagnostics objects hang off the
@@ -166,7 +166,7 @@ class PubSubInfoModelDiagnosticsTest {
       assertTrue(node(server, path).isPresent(), "expected a Diagnostics object at " + path);
     }
 
-    // Basic level, the six State* counters, and the kind-specific counters (pin R13/R14)
+    // Basic level, the six State* counters, and the kind-specific counters
     assertEquals(
         DiagnosticsLevel.Basic,
         fragmentValue(server, "PubSub/c1/wg1/Diagnostics/DiagnosticsLevel"));
@@ -205,7 +205,7 @@ class PubSubInfoModelDiagnosticsTest {
     ServerPubSub serverPubSub = attachWithDiagnostics(server, disabledConfig(server));
     serverPubSub.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // Max* = 0 (no limit) for every advertised capability (pin R20)
+    // Max* = 0 (no limit) for every advertised capability
     for (NodeId maxNode :
         List.of(
             NodeIds.PublishSubscribe_PubSubCapablities_MaxPubSubConnections,
@@ -233,7 +233,7 @@ class PubSubInfoModelDiagnosticsTest {
     ServerPubSub serverPubSub = attachWithDiagnostics(server, disabledConfig(server));
     serverPubSub.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // 127.0.0.1 resolves to itself; the connection LiveValue carries the resolved address (pin R15)
+    // 127.0.0.1 resolves to itself; the connection LiveValue carries the resolved address
     assertEquals(
         "127.0.0.1", fragmentValue(server, "PubSub/c1/Diagnostics/LiveValues/ResolvedAddress"));
   }
@@ -317,7 +317,7 @@ class PubSubInfoModelDiagnosticsTest {
     long before = ((UInteger) fragmentValue(server, counterPath)).longValue();
     assertTrue(before > 0, "expected a non-zero SentNetworkMessages before reset");
 
-    // session-less Reset is denied (pin R18/R9) and does not zero the counter
+    // session-less Reset is denied and does not zero the counter
     assertEquals(
         StatusCodes.Bad_UserAccessDenied,
         callMethod(server, "PubSub/c1/wg1/Diagnostics", "Reset", AccessContext.INTERNAL)
@@ -344,7 +344,7 @@ class PubSubInfoModelDiagnosticsTest {
                 .build());
     serverPubSub.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // an authorized session still fails when the authorizer denies checkConfigure (pin R9)
+    // an authorized session still fails when the authorizer denies checkConfigure
     assertEquals(
         StatusCodes.Bad_UserAccessDenied,
         callMethod(server, "PubSub/c1/wg1/Diagnostics", "Reset", session(server)).getValue());
@@ -415,7 +415,7 @@ class PubSubInfoModelDiagnosticsTest {
     ServerPubSub serverPubSub = attachWithDiagnostics(server, readerConfig());
     serverPubSub.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // Optional §9.1.11.12 MessageSequenceNumber (pin R13): a UInt16 LiveValue on the reader's
+    // Optional §9.1.11.12 MessageSequenceNumber: a UInt16 LiveValue on the reader's
     // Diagnostics, backed by the DataSetReceivedEvent feed, reading 0 until a DataSet is received
     String path = "PubSub/rc1/rg1/reader1/Diagnostics/LiveValues/MessageSequenceNumber";
     UaVariableNode node = (UaVariableNode) node(server, path).orElseThrow();

@@ -388,7 +388,7 @@ class ConfigBuilderTest {
       assertEquals(Duration.ofMillis(1000), group.getPublishingInterval());
       assertNull(group.getKeepAliveTime());
       assertEquals(ubyte(0), group.getPriority());
-      // 0 = no enforced limit; the pre-HG1 default of 1400 would newly reject messages in the
+      // 0 = no enforced limit; a default of 1400 would newly reject messages in the
       // 1400-2048 byte range that always worked end-to-end
       assertEquals(uint(0), group.getMaxNetworkMessageSize());
       assertNull(group.getMessageSecurity());

@@ -325,7 +325,7 @@ final class DiscoveryRuntime {
     return responderActive() || hasRequestIfMissingReaders();
   }
 
-  /** The responder is active iff the connection has writer groups (pinned predicate). */
+  /** The responder is active iff the connection has writer groups. */
   private boolean responderActive() {
     return !connection.writerGroupRuntimes().isEmpty();
   }

@@ -89,7 +89,7 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
   private volatile boolean disposed = false;
 
   /**
-   * Consumes transport connectivity transitions (R16): a broker disconnect drives this connection's
+   * Consumes transport connectivity transitions: a broker disconnect drives this connection's
    * {@code PubSubState} to {@code Error} (cascading its groups and their writers/readers to {@code
    * Paused} per the §6.2.1 rules), and a reconnect recovers it to {@code Operational} —
    * re-activating those components, which re-issues subscriptions (via the transport) and

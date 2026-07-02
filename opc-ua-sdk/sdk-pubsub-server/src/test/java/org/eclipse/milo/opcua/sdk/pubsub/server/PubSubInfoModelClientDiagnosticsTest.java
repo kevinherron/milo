@@ -89,9 +89,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * WP-T5b: the Part 14 §9.1.11 diagnostics exposure, §9.1.9 PubSubCapabilities (R20), §9.1.10
- * Enable/Disable, and the R10 rebuild-on-reconfigure driven <b>end-to-end through a real {@link
- * OpcUaClient}</b> connected to a started, endpoint-bound embedded server.
+ * The Part 14 §9.1.11 diagnostics exposure, §9.1.9 PubSubCapabilities, §9.1.10 Enable/Disable, and
+ * the rebuild-on-reconfigure driven <b>end-to-end through a real {@link OpcUaClient}</b> connected
+ * to a started, endpoint-bound embedded server.
  *
  * <p>Where {@link PubSubInfoModelDiagnosticsTest} and {@link PubSubInfoModelWritableTest} exercise
  * the fragment internals by reading nodes from the {@code AddressSpaceManager} directly and
@@ -190,7 +190,7 @@ class PubSubInfoModelClientDiagnosticsTest {
                 "Reset")),
         "root Diagnostics children over the wire: " + rootChildren);
 
-    // DiagnosticsLevel reads Basic (R13); the enum crosses the wire as its Int32 value.
+    // DiagnosticsLevel reads Basic; the enum crosses the wire as its Int32 value.
     assertEquals(
         DiagnosticsLevel.Basic.getValue(),
         enumValue(readValueOrThrow(client, NodeIds.PublishSubscribe_Diagnostics_DiagnosticsLevel)));
@@ -217,7 +217,7 @@ class PubSubInfoModelClientDiagnosticsTest {
           "expected a Basic DiagnosticsLevel at " + path);
     }
 
-    // The WP-W per-kind counter nodes are readable over the client (all 0 while disabled).
+    // The per-kind counter nodes are readable over the client (all 0 while disabled).
     for (String counterPath :
         List.of(
             "PubSub/c1/wg1/Diagnostics/Counters/SentNetworkMessages",
@@ -245,7 +245,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     attachDiagnostics(server, disabledConfig());
     OpcUaClient client = connect(server);
 
-    // R20: Max* = 0 (no limit) over the wire.
+    // Max* = 0 (no limit) over the wire.
     for (NodeId maxNode :
         List.of(
             NodeIds.PublishSubscribe_PubSubCapablities_MaxPubSubConnections,
@@ -282,7 +282,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     attach(server, sksConfig(), options);
     OpcUaClient client = connect(server);
 
-    // R20 per-option: with the SKS server face enabled the capability flips true over the wire.
+    // Per-option: with the SKS server face enabled the capability flips true over the wire.
     assertEquals(
         Boolean.TRUE,
         readValueOrThrow(
@@ -295,7 +295,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     attachDiagnostics(server, disabledConfig());
     OpcUaClient client = connect(server);
 
-    // R15: the connection LiveValue carries the resolved UDP host; 127.0.0.1 resolves to itself.
+    // The connection LiveValue carries the resolved UDP host; 127.0.0.1 resolves to itself.
     assertEquals(
         "127.0.0.1",
         readValueOrThrow(
@@ -304,7 +304,7 @@ class PubSubInfoModelClientDiagnosticsTest {
 
   // endregion
 
-  // region value cross-check (R13/R14 + UInt32 clamp semantics)
+  // region value cross-check (UInt32 clamp semantics)
 
   @Test
   void counterNodeTracksEngineSnapshotOverClient() throws Exception {
@@ -345,7 +345,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     // SourceTimestamp on every read, so even with the value frozen the timestamp keeps advancing
     // (which is exactly what §9.1.11.5 requires once the value pins at 0xFFFFFFFF). Forcing the
     // actual 2^32 cap needs an internal DiagnosticsCollector seam not reachable from this module
-    // (see the WP-T5b notes) and is unit-covered in sdk-pubsub's DiagnosticsCollectorTest.
+    // and is unit-covered in sdk-pubsub's DiagnosticsCollectorTest.
     assertNotNull(firstRead.getSourceTime());
     DataValue secondRead = readValue(client, counterId);
     assertEquals(
@@ -358,7 +358,7 @@ class PubSubInfoModelClientDiagnosticsTest {
 
   // endregion
 
-  // region Reset round-trip (R18 + R9)
+  // region Reset round-trip
 
   @Test
   void perComponentResetOverClientZeroesCountersAndPreservesLastError() throws Exception {
@@ -387,7 +387,7 @@ class PubSubInfoModelClientDiagnosticsTest {
             .component("c1/wg1")
             .map(ComponentDiagnostics::lastError);
 
-    // With no RoleMapper the default authorizer allows any authenticated session (pin R9); the real
+    // With no RoleMapper the default authorizer allows any authenticated session; the real
     // client Call runs the AccessController Call gate then the handler's checkConfigure.
     NodeId diagnosticsId = fragmentNodeId(server, "PubSub/c1/wg1/Diagnostics");
     NodeId resetId = fragmentNodeId(server, "PubSub/c1/wg1/Diagnostics/Reset");
@@ -395,7 +395,7 @@ class PubSubInfoModelClientDiagnosticsTest {
 
     assertEquals(0L, ((UInteger) readValueOrThrow(client, counterId)).longValue());
 
-    // Reset is specified for counters only: lastError is left untouched (pin R12/§9.1.11.3).
+    // Reset is specified for counters only: lastError is left untouched (§9.1.11.3).
     Optional<StatusCode> lastErrorAfter =
         serverPubSub
             .runtime()
@@ -423,7 +423,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     NodeId statusId = fragmentNodeId(server, "PubSub/c1/wg1/Status");
     NodeId enableId = fragmentNodeId(server, "PubSub/c1/wg1/Status/Enable");
 
-    // Without ConfigureAdmin the default authorizer denies over the wire (pin R9).
+    // Without ConfigureAdmin the default authorizer denies over the wire.
     roleMapper.setRoleIds(List.of());
     assertEquals(StatusCodes.Bad_UserAccessDenied, call(client, diagnosticsId, resetId).getValue());
     assertEquals(StatusCodes.Bad_UserAccessDenied, call(client, statusId, enableId).getValue());
@@ -454,7 +454,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     NodeId enableId = fragmentNodeId(server, "PubSub/c1/wg1/Status/Enable");
     NodeId disableId = fragmentNodeId(server, "PubSub/c1/wg1/Status/Disable");
 
-    // A denying authorizer rejects Reset AND Enable/Disable over the wire (pin R9).
+    // A denying authorizer rejects Reset AND Enable/Disable over the wire.
     assertEquals(StatusCodes.Bad_UserAccessDenied, call(client, diagnosticsId, resetId).getValue());
     assertEquals(StatusCodes.Bad_UserAccessDenied, call(client, statusId, enableId).getValue());
     assertEquals(StatusCodes.Bad_UserAccessDenied, call(client, statusId, disableId).getValue());
@@ -514,7 +514,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     attach(server, disabledConfig(), options);
     OpcUaClient client = connect(server);
 
-    // The attach persisted the config once (S7); Enable/Disable are not config mutations (pin R8).
+    // The attach persisted the config once; Enable/Disable are not config mutations.
     int baseline = store.saveCount;
     assertTrue(baseline >= 1, "attach should have saved the config once");
 
@@ -526,12 +526,12 @@ class PubSubInfoModelClientDiagnosticsTest {
     assertEquals(StatusCode.GOOD, call(client, statusId, enableId));
     assertEquals(StatusCode.GOOD, call(client, statusId, disableId));
 
-    assertEquals(baseline, store.saveCount, "Enable/Disable must not trigger store.save (pin R8)");
+    assertEquals(baseline, store.saveCount, "Enable/Disable must not trigger store.save");
   }
 
   // endregion
 
-  // region rebuild-on-reconfigure (R10)
+  // region rebuild-on-reconfigure
 
   @Test
   void reconfigureTracksDiagnosticsSubtreesAndSparesMonitoredItemsOverClient() throws Exception {
@@ -557,7 +557,7 @@ class PubSubInfoModelClientDiagnosticsTest {
     assertEquals(
         StatusCodes.Bad_NodeIdUnknown, readValue(client, c2Counter).getStatusCode().getValue());
 
-    // Add a second connection via the info-model-consistent reconfigure (R10).
+    // Add a second connection via the info-model-consistent reconfigure.
     PubSubConfig withC2 =
         PubSubConfig.builder()
             .publishedDataSet(publishedDataSet(false))
@@ -828,7 +828,7 @@ class PubSubInfoModelClientDiagnosticsTest {
   private static PubSubConnectionConfig disabledConnection(
       String connection, String group, String writer) {
     // disabled connections never bind a socket, so fixed deterministic ports keep the config stable
-    // across reconfigures (component config equality drives the incremental R10 rebuild)
+    // across reconfigures (component config equality drives the incremental rebuild)
     int base = 41000 + Math.floorMod(connection.hashCode(), 1000) * 2;
     // each connection is its own publisher-id scope so the reused writerGroupId/dataSetWriterId in
     // a

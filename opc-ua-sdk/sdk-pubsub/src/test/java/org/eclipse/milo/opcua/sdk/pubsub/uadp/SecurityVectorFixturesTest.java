@@ -59,7 +59,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Verified decode of the checked-in secured-NetworkMessage fixtures under {@code
- * src/test/resources/security-vectors/} (K20: computed vectors as checked-in test resources).
+ * src/test/resources/security-vectors/} (computed vectors as checked-in test resources).
  *
  * <p>Each fixture is a {@code <name>.bin} (the full secured NetworkMessage bytes) plus a {@code
  * <name>.keys.json} (policy, keys, keyNonce, messageNonce, tokenId, mode) — the format is
@@ -68,11 +68,11 @@ import org.junit.jupiter.params.provider.MethodSource;
  * vectors captured from other implementations (open62541, OPC Labs) drop in without test changes.
  *
  * <p>The {@code computed-*} fixtures were generated and are independently re-verified — without any
- * Milo code — by {@code milo-pubsub-notes/captures/check-phase4-vectors.py} (Python stdlib
- * HMAC-SHA256, AES-CTR via the openssl CLI cross-checked against the {@code cryptography} package).
- * For those this test additionally asserts bit-exact encoder reproduction with the recorded
- * MessageNonce injected, closing the loop: hand-derived spec layout == independent recompute ==
- * checked-in bytes == Milo encoder output, and the Milo decoder verifies it.
+ * Milo code — by an external Python script (Python stdlib HMAC-SHA256, AES-CTR via the openssl CLI
+ * cross-checked against the {@code cryptography} package). For those this test additionally asserts
+ * bit-exact encoder reproduction with the recorded MessageNonce injected, closing the loop:
+ * hand-derived spec layout == independent recompute == checked-in bytes == Milo encoder output, and
+ * the Milo decoder verifies it.
  */
 class SecurityVectorFixturesTest {
 
@@ -82,7 +82,7 @@ class SecurityVectorFixturesTest {
 
   private final EncodingContext encodingContext = new DefaultEncodingContext();
 
-  /** The three computed vectors pinned by K20 must be present in the resources directory. */
+  /** The three computed vectors must be present in the resources directory. */
   @Test
   void pinnedComputedVectorsPresent() throws Exception {
     List<String> names = vectors().map(Object::toString).toList();
@@ -159,7 +159,7 @@ class SecurityVectorFixturesTest {
 
   /**
    * The Milo encoder, fed the documented writer/group shape and the recorded MessageNonce,
-   * reproduces the computed fixture bytes bit-exactly (encode-direction K20 check against the
+   * reproduces the computed fixture bytes bit-exactly (encode-direction check against the
    * independent Python/openssl recompute that generated the files).
    */
   @ParameterizedTest(name = "{0}")

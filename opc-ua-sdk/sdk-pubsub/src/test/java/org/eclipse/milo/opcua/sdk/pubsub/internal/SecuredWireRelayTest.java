@@ -90,18 +90,18 @@ import org.junit.jupiter.params.provider.MethodSource;
  * Milo-to-Milo secured engine tests with the wire in the test's hand: a REAL publisher service
  * emits secured NetworkMessages into a capturing stub transport, and the test relays each captured
  * datagram into a REAL subscriber service's transport consumer — the seam where a network attacker
- * (or lossy network) sits. This pins wire-observable Phase 4 behavior no unit test can:
+ * (or lossy network) sits. This pins wire-observable behavior no unit test can:
  *
  * <ul>
- *   <li>K18 through the engine: a datagram tampered between encode and delivery (payload byte or
- *       signature byte) ticks {@code invalidSignatureMessages}, is never delivered, and does not
- *       advance the reader's §7.2.3 sequence window — the authentic datagram with the same sequence
- *       number still delivers.
- *   <li>K6 token rollover on the wire under a fast-rotating {@link SecurityKeyProvider}: the
- *       publisher switches SecurityTokenId at TimeToNextKey, the MessageNonce sequence-number part
- *       resets to 1 per token (Part 14 §7.2.4.4.3.2 Table 156), the subscriber follows via its
- *       token window with zero message loss and zero unknown-token/stale-key drops.
- *   <li>K5 nonce uniqueness: two writer groups sharing one SecurityGroup never reuse a (tokenId,
+ *   <li>Tamper detection through the engine: a datagram tampered between encode and delivery
+ *       (payload byte or signature byte) ticks {@code invalidSignatureMessages}, is never
+ *       delivered, and does not advance the reader's §7.2.3 sequence window — the authentic
+ *       datagram with the same sequence number still delivers.
+ *   <li>Token rollover on the wire under a fast-rotating {@link SecurityKeyProvider}: the publisher
+ *       switches SecurityTokenId at TimeToNextKey, the MessageNonce sequence-number part resets to
+ *       1 per token (Part 14 §7.2.4.4.3.2 Table 156), the subscriber follows via its token window
+ *       with zero message loss and zero unknown-token/stale-key drops.
+ *   <li>Nonce uniqueness: two writer groups sharing one SecurityGroup never reuse a (tokenId,
  *       MessageNonce) pair — the per-token nonce counter is shared, not per-group.
  * </ul>
  *
@@ -475,8 +475,8 @@ class SecuredWireRelayTest {
   }
 
   /**
-   * K18 with a real publisher on the wire: a datagram tampered between encode and delivery is
-   * dropped whole with {@code invalidSignatureMessages}, delivers nothing, and does not advance the
+   * With a real publisher on the wire: a datagram tampered between encode and delivery is dropped
+   * whole with {@code invalidSignatureMessages}, delivers nothing, and does not advance the
    * reader's §7.2.3 sequence window — the AUTHENTIC datagram carrying the same DataSetMessage
    * sequence number is then still new and delivers.
    */
@@ -509,11 +509,11 @@ class SecuredWireRelayTest {
         "tampered frame must tick invalidSignatureMessages at the reader group");
     assertTrue(events.isEmpty(), "tampered frame must not be delivered");
 
-    // K18: the rejected frame did not advance the window — the authentic frame with the SAME
+    // The rejected frame did not advance the window — the authentic frame with the SAME
     // sequence number is new, not stale
     relay(authentic);
     DataSetReceivedEvent redelivered = events.poll(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-    assertNotNull(redelivered, "the authentic same-sequence frame must deliver (K18)");
+    assertNotNull(redelivered, "the authentic same-sequence frame must deliver");
     assertEquals(
         (firstSequence.intValue() + 1) & 0xFFFF,
         redelivered.dataSetMessageSequenceNumber().intValue());
@@ -526,7 +526,7 @@ class SecuredWireRelayTest {
   }
 
   /**
-   * K6 token rollover on the wire: under a fast-rotating provider the publisher switches
+   * Token rollover on the wire: under a fast-rotating provider the publisher switches
    * SecurityTokenId at TimeToNextKey, resetting the MessageNonce sequence-number part to 1 for the
    * new token (Table 156); every relayed frame is delivered in order across the switch (the
    * subscriber's token window follows), with zero unknown-token, stale-key, or signature drops and
@@ -618,7 +618,7 @@ class SecuredWireRelayTest {
   }
 
   /**
-   * K5 nonce uniqueness across writer groups: two writer groups sharing one SecurityGroup draw
+   * Nonce uniqueness across writer groups: two writer groups sharing one SecurityGroup draw
    * MessageNonces from ONE per-token counter — across N captured NetworkMessages from both groups,
    * every (tokenId, nonce) pair and every nonce sequence-number value is distinct (nonce uniqueness
    * is per key, not per group; a per-group counter would collide at 1).

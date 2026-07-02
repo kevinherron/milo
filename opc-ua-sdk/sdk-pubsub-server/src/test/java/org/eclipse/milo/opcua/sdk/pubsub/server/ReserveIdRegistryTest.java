@@ -35,7 +35,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConnectionDataTy
 import org.eclipse.milo.opcua.stack.core.types.structured.WriterGroupDataType;
 import org.junit.jupiter.api.Test;
 
-/** Tests for the per-Session {@link ReserveIdRegistry} (Phase 5 pin R5). */
+/** Tests for the per-Session {@link ReserveIdRegistry}. */
 class ReserveIdRegistryTest {
 
   private static final ULong DEFAULT_PUBLISHER_ID = ulong(0xAABBCCDDL);

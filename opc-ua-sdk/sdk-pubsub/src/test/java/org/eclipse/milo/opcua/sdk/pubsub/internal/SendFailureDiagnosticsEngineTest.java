@@ -57,9 +57,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end R14 send-failure diagnostics through the real engine (the un-flatten and
- * shutdown-silence contract that {@code DiagnosticsCollectorTest} pins only at the collector
- * level):
+ * End-to-end send-failure diagnostics through the real engine (the un-flatten and shutdown-silence
+ * contract that {@code DiagnosticsCollectorTest} pins only at the collector level):
  *
  * <ul>
  *   <li>a transport send failure surfaces the channel's REAL {@link StatusCode} (not the former
@@ -199,7 +198,7 @@ class SendFailureDiagnosticsEngineTest {
     }
     assertTrue(completed >= 1, "expected at least one in-flight send to fail after shutdown");
 
-    // R14 shutdown silence: no counter, no lastError, no event for a failure on a torn-down channel
+    // shutdown silence: no counter, no lastError, no event for a failure on a torn-down channel
     assertEquals(0, diag("conn/WG").failedTransmissions());
     assertEquals(0, diag("conn/WG/W1").failedDataSetMessages());
     assertNull(diag("conn/WG").lastError());

@@ -59,8 +59,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Golden vectors for the JSON mapping: the worked {@code ua-data} and {@code ua-metadata} examples
- * of the Phase 3 grounding (themselves built strictly from Part 14 §7.2.5.3/.4/.5 rules) and the
- * spec's own verbatim §7.2.5.4.2 DataSetMessage examples.
+ * (built strictly from Part 14 §7.2.5.3/.4/.5 rules) and the spec's own verbatim §7.2.5.4.2
+ * DataSetMessage examples.
  *
  * <p>Encode comparisons are JsonElement-level (member order insensitive); the pinned Table 184/185
  * member order is asserted separately.
@@ -72,7 +72,7 @@ class JsonGoldenVectorTest {
       UUID.fromString("3c1a4f6e-0f2a-4d3b-9d51-6e7f8a9b0c1d");
   private static final UUID MODE_FIELD_ID = UUID.fromString("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9");
 
-  /** The masks of grounding worked example 7.1. */
+  /** The masks of the worked example. */
   private static final JsonNetworkMessageContentMask EXAMPLE_NM_MASK =
       JsonNetworkMessageContentMask.of(
           JsonNetworkMessageContentMask.Field.NetworkMessageHeader,
@@ -121,11 +121,10 @@ class JsonGoldenVectorTest {
   }
 
   /**
-   * Encoding the worked-example draft reproduces grounding example 7.1, with two recorded
-   * differences: {@code MessageId} is a random UUID (asserted separately, stripped before
-   * comparison) and the Good DataSetMessage {@code Status} is omitted rather than emitted as {@code
-   * {}} (the pinned N5 omit-when-Good behavior; the grounding notes a publisher "may equally omit"
-   * it).
+   * Encoding the worked-example draft reproduces the worked example, with two recorded differences:
+   * {@code MessageId} is a random UUID (asserted separately, stripped before comparison) and the
+   * Good DataSetMessage {@code Status} is omitted rather than emitted as {@code {}} (a publisher
+   * may omit the Status member entirely when the status is Good).
    */
   @Test
   void encodeKeyFrameMatchesWorkedExample() throws Exception {
@@ -227,7 +226,7 @@ class JsonGoldenVectorTest {
         List.copyOf(dataSetMessage.keySet()));
   }
 
-  /** Grounding worked example 7.1, decoded verbatim (including the {@code Status: {}} member). */
+  /** The worked example, decoded verbatim (including the {@code Status: {}} member). */
   @Test
   void decodeWorkedExampleNetworkMessage() throws Exception {
     DecodedNetworkMessage decoded =
@@ -298,7 +297,7 @@ class JsonGoldenVectorTest {
     assertEquals(new StatusCode(0x40000000L), mode.value().statusCode());
   }
 
-  /** Grounding worked example 7.2: headerless single-DSM delta frame, Variant fields. */
+  /** Worked example: headerless single-DSM delta frame, Variant fields. */
   @Test
   void decodeWorkedExampleDeltaFrame() throws Exception {
     DecodedNetworkMessage decoded =
@@ -336,10 +335,10 @@ class JsonGoldenVectorTest {
   }
 
   /**
-   * Encoding a delta frame draft reproduces grounding worked example 7.2 (the decode vector above):
-   * a headerless single-DSM {@code ua-deltaframe} whose Payload carries only the changed field,
-   * name-resolved from the draft metadata by its explicit index (Part 14 §7.2.5.4.1 Table 185).
-   * Member order is pinned to the Table 185 order.
+   * Encoding a delta frame draft reproduces the decode vector above: a headerless single-DSM {@code
+   * ua-deltaframe} whose Payload carries only the changed field, name-resolved from the draft
+   * metadata by its explicit index (Part 14 §7.2.5.4.1 Table 185). Member order is pinned to the
+   * Table 185 order.
    */
   @Test
   void encodeWorkedExampleDeltaFrame() throws Exception {
@@ -500,7 +499,7 @@ class JsonGoldenVectorTest {
   }
 
   /**
-   * Encoding the worked-example metadata reproduces grounding example 7.3: all eight Table 188
+   * Encoding the worked-example metadata reproduces the metadata example: all eight Table 188
    * members in order, CompactEncoding throughout. {@code MessageId} and {@code Timestamp} are
    * generated and asserted by shape; Guid strings are compared case-insensitively (the stock struct
    * codec uppercases Guids inside {@code MetaData}, the spec is case-agnostic).
@@ -581,7 +580,7 @@ class JsonGoldenVectorTest {
         normalizeUuidStrings(expectedMetaData), normalizeUuidStrings(actual.get("MetaData")));
   }
 
-  /** Grounding worked example 7.3, decoded verbatim. */
+  /** The metadata worked example, decoded verbatim. */
   @Test
   void decodeMetaDataWorkedExample() throws Exception {
     DecodedNetworkMessage decoded =

@@ -66,7 +66,7 @@ final class JsonTestFixtures {
 
   static final PublisherId PUBLISHER_ID = PublisherId.string("line-7");
 
-  /** The ConfigurationVersion used by the grounding worked examples. */
+  /** The ConfigurationVersion used by the worked examples. */
   static final ConfigurationVersionDataType EXAMPLE_VERSION =
       new ConfigurationVersionDataType(uint(1444863032L), uint(1444863033L));
 

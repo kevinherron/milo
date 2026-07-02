@@ -71,7 +71,7 @@ class RemoteConfigurationServerAttachTest {
       ServerPubSub serverPubSub =
           ServerPubSub.attach(test.getServer(), PubSubConfig.builder().build());
       try {
-        // pin R3 / FileType-contract open question 9: the Mandatory FileType properties are set at
+        // the Mandatory FileType properties are set at
         // attach time reflecting allowRemoteConfiguration=false, even without startup
         assertEquals(
             Boolean.FALSE, ns0Value(test, NodeIds.PublishSubscribe_PubSubConfiguration_Writable));
@@ -81,7 +81,7 @@ class RemoteConfigurationServerAttachTest {
         assertEquals(
             UShort.valueOf(0),
             ns0Value(test, NodeIds.PublishSubscribe_PubSubConfiguration_OpenCount));
-        // FileType-contract open question 4: with remote configuration disabled the virtual file
+        // with remote configuration disabled the virtual file
         // can never be opened, so no read snapshot exists and Size is reported as 0 (the
         // configuration is deliberately not serialized at attach to derive a size)
         assertEquals(

@@ -351,7 +351,7 @@ final class ConfigDiff {
    * their key state, effective security resolution, and Security Key Service registration derive
    * from the SecurityGroup's parameters (policy URI, KeyLifetime, id), and a restart re-registers
    * with the key manager and re-fetches keys — the Part 14 §6.2.12.2 "modification invalidates
-   * existing keys" behavior (consumed by the Phase 5 R7 remote-config path).
+   * existing keys" behavior (consumed by the remote-config path).
    */
   private static void addSecurityGroupInducedChanges(
       PubSubConfig newConfig, Set<String> changedSecurityGroups, List<Change> changes) {

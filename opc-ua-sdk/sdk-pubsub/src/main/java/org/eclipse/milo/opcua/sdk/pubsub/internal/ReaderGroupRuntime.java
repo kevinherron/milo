@@ -145,19 +145,19 @@ final class ReaderGroupRuntime extends AbstractComponentRuntime {
 
   /**
    * Register the SecurityGroupRef of {@code reader}'s effective security with the key manager, with
-   * this group as the consuming component (group-level PreOperational gating is the pinned
-   * posture). Called from the reader's activate hook: a reader enabled — or added by reconfigure —
-   * after this group activated may carry an override selecting a SecurityGroup the group's own
-   * activation never registered; without registering it here that ref would never fetch keys and
-   * every matching secured message would drop as unknown-token forever, silently (K6
-   * fetch-at-startup for the K9 reader-override case). Idempotent for already-registered refs.
+   * this group as the consuming component (group-level PreOperational gating). Called from the
+   * reader's activate hook: a reader enabled — or added by reconfigure — after this group activated
+   * may carry an override selecting a SecurityGroup the group's own activation never registered;
+   * without registering it here that ref would never fetch keys and every matching secured message
+   * would drop as unknown-token forever, silently (fetch-at-startup for the reader-override case).
+   * Idempotent for already-registered refs.
    *
    * <p>The ref stays registered until the group deactivates (disabling the reader again does not
    * unregister it — the group is the consumer); {@link #deactivate} removes every ref this group
    * registered, ctor-time and late alike.
    *
    * @throws UaException with {@code Bad_ConfigurationError} if no provider is bound for the ref or
-   *     keys are already held under a mismatching policy (the K8 registration gate).
+   *     keys are already held under a mismatching policy (the policy registration gate).
    */
   void ensureReaderSecurityRegistration(DataSetReaderRuntime reader) throws UaException {
     EffectiveMessageSecurity security = reader.effectiveSecurity();
@@ -219,11 +219,11 @@ final class ReaderGroupRuntime extends AbstractComponentRuntime {
   }
 
   /**
-   * Re-run the K3 message security validation at activation (the HG4 activation-backstop
-   * precedent): a secured JSON-mapped reader, or a secured group/reader without a resolvable
-   * SecurityGroupRef, a supported policy, or a bound SecurityKeyProvider, fails into {@code
-   * PubSubState.Error} with {@code Bad_ConfigurationError}. Startup/reconfigure validation only
-   * sees enabled components, so this closes the disabled-at-startup-then-enabled gap.
+   * Re-run the message security validation at activation (the activation-time backstop precedent):
+   * a secured JSON-mapped reader, or a secured group/reader without a resolvable SecurityGroupRef,
+   * a supported policy, or a bound SecurityKeyProvider, fails into {@code PubSubState.Error} with
+   * {@code Bad_ConfigurationError}. Startup/reconfigure validation only sees enabled components, so
+   * this closes the disabled-at-startup-then-enabled gap.
    */
   private void checkMessageSecurity() throws UaException {
     String error = service.messageSecurityConfigError(service.getConfig(), config, path());

@@ -332,7 +332,7 @@ final class DataSetWriterRuntime extends AbstractComponentRuntime {
    * key frame, and cycles serialize on the group's publish lock, so the frame state never tears.
    * There is no deterministic unit seam for this interleaving (the runtime requires a full
    * service); the behavioral contract — first frame after a re-activation is a key frame — is
-   * pinned by the cadence tests.
+   * verified by the cadence tests.
    */
   void requestFrameStateReset() {
     resetGeneration++;

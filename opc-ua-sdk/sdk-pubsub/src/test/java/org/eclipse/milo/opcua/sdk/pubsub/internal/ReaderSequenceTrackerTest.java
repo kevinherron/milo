@@ -104,10 +104,10 @@ class ReaderSequenceTrackerTest {
 
   /**
    * §7.2.3 discards records when the subscriber does "not receive messages" for the discard period
-   * — and keep-alives are received messages. A keep-alive-only period of any length (the post-HG3
-   * steady state of a quiet publisher) must keep a seeded stream record alive: each consistent
-   * keep-alive refreshes the discard clock while the window position never moves, so a
-   * then-replayed old data message still classifies STALE.
+   * — and keep-alives are received messages. A keep-alive-only period of any length (the steady
+   * state of a quiet publisher) must keep a seeded stream record alive: each consistent keep-alive
+   * refreshes the discard clock while the window position never moves, so a then-replayed old data
+   * message still classifies STALE.
    */
   @Test
   void keepAlivesOnASeededStreamRefreshTheRecordDiscardClock() {
@@ -319,10 +319,10 @@ class ReaderSequenceTrackerTest {
   }
 
   /**
-   * A restarted publisher that interleaves keep-alives with data (the post-HG3 steady state)
-   * recovers via the keep-alive reseed directly: pre-fix each keep-alive merely cleared the
-   * 16-rejection streak — blocking the restart heuristic — and refreshed the discard clock, so with
-   * the timeout disabled (and with it armed alike) the stream stayed wedged forever.
+   * A restarted publisher that interleaves keep-alives with data (the steady state) recovers via
+   * the keep-alive reseed directly: pre-fix each keep-alive merely cleared the 16-rejection streak
+   * — blocking the restart heuristic — and refreshed the discard clock, so with the timeout
+   * disabled (and with it armed alike) the stream stayed wedged forever.
    */
   @Test
   void interleavedKeepAlivesRecoverARestartedPublisherViaTheReseedDirectly() {

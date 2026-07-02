@@ -33,11 +33,11 @@ import org.eclipse.milo.opcua.stack.core.types.structured.WriterGroupDataType;
  * WriterGroupIds and DataSetWriterIds from the internal-assignment range {@code 0x8000-0xFFFF} and
  * returns the transport-profile default PublisherId (§6.2.7.1).
  *
- * <p>WP-X pin R5: reservations are valid while the Session lives; uniqueness spans the live
- * configuration and all outstanding reservations (from every Session); reservations are released
- * when the reserved id appears in the applied configuration ({@link #releaseUsed}) or when the
- * Session closes ({@link #evictSession}). The allocator owns {@code 0x8000-0xFFFF}; an unknown
- * TransportProfileUri is {@code Bad_InvalidArgument}; a request that cannot be satisfied is {@code
+ * <p>Reservations are valid while the Session lives; uniqueness spans the live configuration and
+ * all outstanding reservations (from every Session); reservations are released when the reserved id
+ * appears in the applied configuration ({@link #releaseUsed}) or when the Session closes ({@link
+ * #evictSession}). The allocator owns {@code 0x8000-0xFFFF}; an unknown TransportProfileUri is
+ * {@code Bad_InvalidArgument}; a request that cannot be satisfied is {@code
  * Bad_ResourceUnavailable}.
  *
  * <p>All methods are synchronized on this instance.

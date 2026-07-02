@@ -40,7 +40,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link ServerPubSub} lifecycle integration of the opt-in SKS server face (K15): the {@code
+ * {@link ServerPubSub} lifecycle integration of the opt-in SKS server face: the {@code
  * GetSecurityKeys} handler on ns0 {@code i=15215} is bound by startup and restored to {@code
  * Bad_NotImplemented} by shutdown, only when {@link ServerPubSubOptions.Builder#sksServerEnabled}
  * is set; SecurityGroup validation fails attach fast.

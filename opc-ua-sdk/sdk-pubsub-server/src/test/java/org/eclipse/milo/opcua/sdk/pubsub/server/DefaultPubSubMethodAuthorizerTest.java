@@ -37,8 +37,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link DefaultPubSubMethodAuthorizer} posture matrix (K17.3): well-known roles when a RoleMapper
- * is configured, allow-when-unconfigured otherwise, fail-closed on per-group RolePermissions that
+ * {@link DefaultPubSubMethodAuthorizer} posture matrix: well-known roles when a RoleMapper is
+ * configured, allow-when-unconfigured otherwise, fail-closed on per-group RolePermissions that
  * cannot be evaluated.
  *
  * <p>Role presence flows through the real {@code Session.getRoleIds()} path: one fixture server has

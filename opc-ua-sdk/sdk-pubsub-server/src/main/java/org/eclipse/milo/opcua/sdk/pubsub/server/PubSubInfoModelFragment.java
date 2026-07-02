@@ -167,26 +167,26 @@ import org.slf4j.LoggerFactory;
  * invalidates handles) does not break tracking; reader DataSetMetaData values are updated from
  * {@link PubSubService#addMetaDataListener}.
  *
- * <p>Config-derived rebuild (Phase 5 pin R10): {@link #onConfigurationApplied(PubSubConfig)}
- * reconciles the config-derived subtrees against a newly applied configuration, keyed by component
- * name path, so a reconfigure no longer desyncs the model from the configuration. It is invoked
- * after a remote {@code CloseAndUpdate} (via the {@link RemoteConfigurationListener} hand-off
- * {@link ServerPubSub} wires in) and after {@link ServerPubSub#reconfigure}. Reconciliation is
- * incremental at connection and top-level (PublishedDataSet) granularity: only connections and
- * datasets whose normalized configuration differs (or that reference a changed dataset) are torn
- * down and rebuilt, leaving unaffected subtrees — and any client subscriptions to them — untouched.
- * A bare {@code ServerPubSub.runtime()} reconfigure still bypasses this hook (there is no
- * engine-level reconfigure notification): callers that need the model kept in sync should
- * reconfigure through {@link ServerPubSub#reconfigure} or the remote-configuration file model.
+ * <p>Config-derived rebuild: {@link #onConfigurationApplied(PubSubConfig)} reconciles the
+ * config-derived subtrees against a newly applied configuration, keyed by component name path, so a
+ * reconfigure no longer desyncs the model from the configuration. It is invoked after a remote
+ * {@code CloseAndUpdate} (via the {@link RemoteConfigurationListener} hand-off {@link ServerPubSub}
+ * wires in) and after {@link ServerPubSub#reconfigure}. Reconciliation is incremental at connection
+ * and top-level (PublishedDataSet) granularity: only connections and datasets whose normalized
+ * configuration differs (or that reference a changed dataset) are torn down and rebuilt, leaving
+ * unaffected subtrees — and any client subscriptions to them — untouched. A bare {@code
+ * ServerPubSub.runtime()} reconfigure still bypasses this hook (there is no engine-level
+ * reconfigure notification): callers that need the model kept in sync should reconfigure through
+ * {@link ServerPubSub#reconfigure} or the remote-configuration file model.
  *
- * <p>Enable/Disable (Phase 5 pin, §9.1.10): when remote configuration is enabled ({@link
+ * <p>Enable/Disable (§9.1.10): when remote configuration is enabled ({@link
  * ServerPubSubOptions#isAllowRemoteConfiguration()}), each config-derived Status object also
  * carries callable {@code Enable} and {@code Disable} methods that delegate to {@link
  * PubSubService#enable} / {@link PubSubService#disable} for the component, after consulting {@link
  * PubSubMethodAuthorizer#checkConfigure}. They enforce the §9.1.10 current-state rules ({@code
  * Bad_InvalidState} when Enable is called on a non-Disabled component or Disable on a Disabled one)
  * and are not configuration mutations (no store save). When remote configuration is off the Status
- * objects stay read-only (State variable only), preserving the S8/S9 read-only posture.
+ * objects stay read-only (State variable only), preserving the read-only posture.
  *
  * <p>Created by {@link ServerPubSub} when {@link ServerPubSubOptions#isExposeInformationModel()} is
  * {@code true}; {@link #startup()} and {@link #shutdown()} are driven by the owning {@link
@@ -217,11 +217,10 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   /**
    * Last-received DataSetMessage sequence number per DataSetReader name path, backing the Optional
-   * §9.1.11.12 {@code MessageSequenceNumber} LiveValue (pin R13). An entry exists only while the
-   * reader's diagnostics node is built; it is fed from {@link PubSubService#addDataSetListener}
-   * deliveries and read at browse time. UInt16 to match Table 331 — the public event spans UInt32
-   * for the JSON mapping, so a value is truncated to its low 16 bits, matching the UADP GroupHeader
-   * width.
+   * §9.1.11.12 {@code MessageSequenceNumber} LiveValue. An entry exists only while the reader's
+   * diagnostics node is built; it is fed from {@link PubSubService#addDataSetListener} deliveries
+   * and read at browse time. UInt16 to match Table 331 — the public event spans UInt32 for the JSON
+   * mapping, so a value is truncated to its low 16 bits, matching the UADP GroupHeader width.
    */
   private final Map<String, UShort> lastReaderMessageSeq = new ConcurrentHashMap<>();
 
@@ -234,7 +233,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private final PubSubService service;
   private final UShort namespaceIndex;
 
-  /** Authorizes Enable/Disable calls (pin R9); reused from the shipped Phase 4 SPI. */
+  /** Authorizes Enable/Disable calls; reused from the message-security SPI. */
   private final PubSubMethodAuthorizer authorizer;
 
   /**
@@ -244,7 +243,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private final boolean enableDisableSupported;
 
   /**
-   * Whether the §9.1.11 diagnostics model is exposed (pins R13/R14/R15/R18). Gated on {@link
+   * Whether the §9.1.11 diagnostics model is exposed. Gated on {@link
    * ServerPubSubOptions#isDiagnosticsEnabled()}; when {@code false} the ns0 Diagnostics ({@code
    * i=17409}) and PubSubCapabilities ({@code i=23678}) skeletons are left exactly as the loader
    * created them and no per-component Diagnostics objects are minted. Diagnostics requires the
@@ -253,7 +252,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
    */
   private final boolean diagnosticsEnabled;
 
-  /** Whether the server hosts the SKS pull face (pin R20 {@code SupportSecurityKeyServer}). */
+  /** Whether the server hosts the SKS pull face ({@code SupportSecurityKeyServer}). */
   private final boolean sksServerEnabled;
 
   /**
@@ -278,8 +277,8 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   private final Object rebuildLock = new Object();
 
   /**
-   * The last-built normalized configuration; the baseline the R10 rebuild diffs against. Null until
-   * the fragment has started and built its initial nodes.
+   * The last-built normalized configuration; the baseline the rebuild diffs against. Null until the
+   * fragment has started and built its initial nodes.
    */
   private volatile @Nullable PubSubConfiguration2DataType builtConfiguration;
 
@@ -473,7 +472,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     if (diagnosticsEnabled) {
       BaseObjectTypeNode liveValues =
           buildComponentDiagnostics(node, name, DiagnosticsKind.CONNECTION);
-      // ResolvedAddress (pin R15): best-effort at exposure time; a documented approximation
+      // ResolvedAddress: best-effort at exposure time; a documented approximation
       addVariableNode(
           liveValues, "ResolvedAddress", NodeIds.String, new Variant(resolveAddress(connection)));
     }
@@ -1203,7 +1202,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   }
 
   /**
-   * Enforce the pin R9 posture for the Enable/Disable methods: a client session is required
+   * Enforce the authorization posture for the Enable/Disable methods: a client session is required
    * (session-less internal calls are {@code Bad_UserAccessDenied}) and {@link
    * PubSubMethodAuthorizer#checkConfigure} must allow.
    */
@@ -1543,12 +1542,12 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   // endregion
 
-  // region config-derived rebuild (pin R10)
+  // region config-derived rebuild
 
   /**
    * Reconcile the config-derived subtrees against {@code appliedConfig}, the configuration a
-   * reconfigure just applied to the engine (pin R10). Connections and PublishedDataSets whose
-   * normalized {@code DataType} differs from the last-built configuration — and connections whose
+   * reconfigure just applied to the engine. Connections and PublishedDataSets whose normalized
+   * {@code DataType} differs from the last-built configuration — and connections whose
    * DataSetWriters reference a changed PublishedDataSet — are torn down and rebuilt from {@code
    * appliedConfig}; unaffected subtrees are left in place. The root Status/State and
    * ConfigurationProperties are refreshed to match. No-op if the fragment is not active.
@@ -1771,7 +1770,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   // endregion
 
-  // region diagnostics exposure (pins R13/R14/R15/R18/R20)
+  // region diagnostics exposure
 
   private static final PubSubDiagnosticsCounterClassification INFO =
       PubSubDiagnosticsCounterClassification.Information;
@@ -1817,7 +1816,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
           Counter.FAILED_DATA_SET_MESSAGES,
           Counter.DECODE_ERRORS);
 
-  /** The ns0 PubSubCapabilities {@code Max*} property nodes (pin R20; all advertised as 0). */
+  /** The ns0 PubSubCapabilities {@code Max*} property nodes (all advertised as 0). */
   private static final List<NodeId> CAPABILITY_MAX_NODES =
       List.of(
           NodeIds.PublishSubscribe_PubSubCapablities_MaxPubSubConnections,
@@ -1834,7 +1833,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
           NodeIds.PublishSubscribe_PubSubCapablities_MaxNetworkMessageSizeDatagram,
           NodeIds.PublishSubscribe_PubSubCapablities_MaxNetworkMessageSizeBroker);
 
-  /** The counters exposed on a diagnostics object of {@code kind} (pin R13/R14). */
+  /** The counters exposed on a diagnostics object of {@code kind}. */
   private static List<CounterSpec> countersFor(DiagnosticsKind kind) {
     var specs = new ArrayList<>(STATE_COUNTERS);
     switch (kind) {
@@ -1863,13 +1862,13 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   }
 
   /**
-   * Mint the per-component {@code Diagnostics} object (pin R18) under {@code componentNode}: its
-   * read-only Basic {@code DiagnosticsLevel}, the {@code TotalInformation}/{@code TotalError} sums
-   * of this object's own counters, the {@code SubError} descendant roll-up, the {@code Reset}
-   * method, and the {@code Counters} folder for {@code kind}. Counter values, Total*, and SubError
-   * are computed at read time from the live {@link PubSubDiagnostics} snapshot with a fresh
-   * SourceTimestamp, and UInt32-clamped (§9.1.11.5). Returns the (empty) {@code LiveValues} folder
-   * so the caller can add the kind-specific live values.
+   * Mint the per-component {@code Diagnostics} object under {@code componentNode}: its read-only
+   * Basic {@code DiagnosticsLevel}, the {@code TotalInformation}/{@code TotalError} sums of this
+   * object's own counters, the {@code SubError} descendant roll-up, the {@code Reset} method, and
+   * the {@code Counters} folder for {@code kind}. Counter values, Total*, and SubError are computed
+   * at read time from the live {@link PubSubDiagnostics} snapshot with a fresh SourceTimestamp, and
+   * UInt32-clamped (§9.1.11.5). Returns the (empty) {@code LiveValues} folder so the caller can add
+   * the kind-specific live values.
    */
   private BaseObjectTypeNode buildComponentDiagnostics(
       UaNode componentNode, String path, DiagnosticsKind kind) {
@@ -1922,7 +1921,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
                   parentId);
         };
 
-    // read-only Basic level; no level switching/activation machinery (pin R13)
+    // read-only Basic level; no level switching/activation machinery
     addVariableNode(
         diagnostics,
         "DiagnosticsLevel",
@@ -2074,7 +2073,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   /**
    * Add the Optional {@code MajorVersion}/{@code MinorVersion} LiveValues from a DataSet's
-   * ConfigurationVersion (pin R13); omitted (conformant) when no configured version is available.
+   * ConfigurationVersion; omitted (conformant) when no configured version is available.
    */
   private void addDataSetVersionLiveValues(
       UaNode liveValues, @Nullable ConfigurationVersionDataType version) {
@@ -2089,9 +2088,9 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   }
 
   /**
-   * Add the Optional §9.1.11.12 {@code MessageSequenceNumber} LiveValue (pin R13) for a
-   * DataSetReader, computed at read time from the last DataSet delivered to {@code readerPath} (see
-   * {@link #registerListeners}). UInt16 per Table 331; reads {@code 0} until the first DataSet is
+   * Add the Optional §9.1.11.12 {@code MessageSequenceNumber} LiveValue for a DataSetReader,
+   * computed at read time from the last DataSet delivered to {@code readerPath} (see {@link
+   * #registerListeners}). UInt16 per Table 331; reads {@code 0} until the first DataSet is
    * received.
    */
   private void addMessageSequenceNumberLiveValue(UaNode liveValues, String readerPath) {
@@ -2118,10 +2117,10 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   /**
    * Back the ns0 root Diagnostics ({@code i=17409}) subtree: values are set on the existing
-   * loader-built nodes and the Reset handler is attached; no ns0 node is minted (pin R18). The root
-   * object's own counters (the six State*) are not engine-backed at the service level, so they and
-   * their Total* sums are 0; the useful root signals are {@code SubError} (any component in error)
-   * and the LiveValues counts, computed at read time.
+   * loader-built nodes and the Reset handler is attached; no ns0 node is minted. The root object's
+   * own counters (the six State*) are not engine-backed at the service level, so they and their
+   * Total* sums are 0; the useful root signals are {@code SubError} (any component in error) and
+   * the LiveValues counts, computed at read time.
    */
   private void exposeRootDiagnostics() {
     setNs0Value(
@@ -2194,12 +2193,13 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   }
 
   /**
-   * Populate the ns0 PubSubCapabilities object ({@code i=23678}) (pin R20). {@code Max*} are 0 ("no
-   * limit"): Milo enforces no fixed component-count cap, and the {@code ReserveIds} allocator only
-   * bounds AUTO-assigned ids ({@code 0x8000-0xFFFF}); clients may still supply their own ids across
-   * the full range, so the advertised "no limit" agrees with actual behavior. {@code
+   * Populate the ns0 PubSubCapabilities object ({@code i=23678}). {@code Max*} are 0 ("no limit"):
+   * Milo enforces no fixed component-count cap, and the {@code ReserveIds} allocator only bounds
+   * AUTO-assigned ids ({@code 0x8000-0xFFFF}); clients may still supply their own ids across the
+   * full range, so the advertised "no limit" agrees with actual behavior. {@code
    * SupportSecurityKeyPull} is true (the SKS pull provider exists), {@code SupportSecurityKeyPush}
-   * is false (cut per K16), and {@code SupportSecurityKeyServer} reflects the SKS-server option.
+   * is false (not supported in this version), and {@code SupportSecurityKeyServer} reflects the
+   * SKS-server option.
    */
   private void exposeCapabilities() {
     for (NodeId maxNode : CAPABILITY_MAX_NODES) {
@@ -2228,7 +2228,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
     setNs0Value(levelNode, new Variant(DiagnosticsLevel.Basic));
   }
 
-  /** Set the value of an existing ns0 variable node by NodeId; never mints (pin R18). */
+  /** Set the value of an existing ns0 variable node by NodeId; never mints. */
   private void setNs0Value(NodeId nodeId, Variant value) {
     getServer()
         .getAddressSpaceManager()
@@ -2464,10 +2464,10 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
   }
 
   /**
-   * The connection's ResolvedAddress (pin R15): for UDP, a best-effort hostname resolution of the
-   * configured URL at exposure time; for MQTT (and unresolvable UDP), the configured broker URL
-   * verbatim. A documented approximation — there is no transport-SPI accessor for the actually
-   * resolved remote address in this version.
+   * The connection's ResolvedAddress: for UDP, a best-effort hostname resolution of the configured
+   * URL at exposure time; for MQTT (and unresolvable UDP), the configured broker URL verbatim. A
+   * documented approximation — there is no transport-SPI accessor for the actually resolved remote
+   * address in this version.
    */
   private String resolveAddress(PubSubConnectionDataType connection) {
     String url =
@@ -2512,7 +2512,7 @@ final class PubSubInfoModelFragment extends ManagedAddressSpaceFragmentWithLifec
 
   // region diagnostics Reset method handlers
 
-  /** Reset a per-component diagnostics object's counters (pin R18), guarded by checkConfigure. */
+  /** Reset a per-component diagnostics object's counters, guarded by checkConfigure. */
   private final class ComponentResetMethod extends PubSubDiagnosticsType.ResetMethod {
 
     private final String path;

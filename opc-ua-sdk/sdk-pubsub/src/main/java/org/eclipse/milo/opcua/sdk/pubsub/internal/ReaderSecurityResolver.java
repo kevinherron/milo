@@ -34,7 +34,7 @@ import org.jspecify.annotations.Nullable;
  * <p>The SecurityHeader names no SecurityGroup — "The relation to the SecurityGroup is done through
  * DataSetWriterIds contained in the NetworkMessage" (Part 14 Table 154) — so candidate
  * SecurityGroups are the effective SecurityGroups of the readers whose filters match the message's
- * PublisherId / WriterGroupId / DataSetWriterIds. Mode acceptance per K7 (§7.2.4.3): a reader whose
+ * PublisherId / WriterGroupId / DataSetWriterIds. Mode acceptance per §7.2.4.3: a reader whose
  * configured mode is above the received mode cannot accept the message (SHALL drop; the per-reader
  * drop is counted by {@code ReaderDispatcher}'s delivery gate, the single counting point for mode
  * drops), and a reader may process a message secured <em>above</em> its configured mode when its
@@ -130,7 +130,7 @@ final class ReaderSecurityResolver implements SecurityContextResolver {
   /**
    * Trigger a proactive key refresh for every SecurityGroup serving readers that match a received
    * force-key-reset signal (SecurityFlags bit 3): the publisher is about to invalidate its keys
-   * (K6, subscriber side). DataSetWriterIds may be unavailable (the signaling message may have been
+   * (subscriber side). DataSetWriterIds may be unavailable (the signaling message may have been
    * dropped before its payload decoded), so matching is by PublisherId/WriterGroupId only.
    */
   void onForceKeyReset(@Nullable PublisherId publisherId, @Nullable UShort writerGroupId) {

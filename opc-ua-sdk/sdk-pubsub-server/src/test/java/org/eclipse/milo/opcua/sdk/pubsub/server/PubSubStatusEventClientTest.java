@@ -70,9 +70,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
 /**
- * WP-T5 R17: CLIENT-SIDE reception of Part 14 §9.1.13 PubSub status events over a <b>real</b>
- * {@link OpcUaClient} event Subscription against a started, endpoint-bound embedded {@link
- * OpcUaServer}.
+ * CLIENT-SIDE reception of Part 14 §9.1.13 PubSub status events over a <b>real</b> {@link
+ * OpcUaClient} event Subscription against a started, endpoint-bound embedded {@link OpcUaServer}.
  *
  * <p>Complements {@link PubSubStatusEventTest}, which observes the {@link PubSubStatusEventBridge}
  * through a direct {@code EventNotifier} listener on an endpoint-less, never-started fixture: that

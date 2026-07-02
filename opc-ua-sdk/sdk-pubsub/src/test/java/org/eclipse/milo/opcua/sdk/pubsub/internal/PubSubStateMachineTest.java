@@ -85,7 +85,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Unit tests for {@link PubSubStateMachine} against the Part 14 §6.2.1 Table 2 oracle (including
- * the pinned parent-Error-behaves-like-Paused resolution), plus engine-level reader lifecycle and
+ * the parent-Error-behaves-like-Paused resolution), plus engine-level reader lifecycle and
  * keep-alive emission semantics exercised through {@link PubSubService} with a stub in-memory
  * transport. The data plane never touches the network; connections with writer groups open real UDP
  * discovery sockets, so those tests pin the discoveryAddress to a unique loopback multicast group
@@ -288,7 +288,7 @@ class PubSubStateMachineTest {
 
   @Test
   void parentErrorPushesChildrenToPausedLikePaused() {
-    // pinned ambiguity: a parent entering Error is treated like a parent in Paused
+    // a parent entering Error is treated like a parent in Paused
     var connection = new TestComponent("conn", null, true);
     var group = new TestComponent("conn/group", connection, true);
     var writer = new TestComponent("conn/group/writer", group, true);
@@ -411,7 +411,7 @@ class PubSubStateMachineTest {
     machine.setRootOperational(true, List.of(connection));
 
     assertEquals(PubSubState.Error, connection.state());
-    // children of the Error parent are Paused, per the pinned ambiguity
+    // children of the Error parent are Paused
     assertEquals(PubSubState.Paused, group.state());
 
     List<Transition> observed = transitionsOf("conn");

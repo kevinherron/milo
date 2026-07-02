@@ -75,10 +75,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * WP-Y writable/live information-model evolution: the config-derived rebuild driven by a
- * reconfigure (pin R10), the §9.1.10 Enable/Disable methods on the Status objects, and the
- * agreement between the fragment's NodeIds and the ConfigurationObjects scheme WP-X returns from
- * {@code CloseAndUpdate}.
+ * Writable/live information-model evolution: the config-derived rebuild driven by a reconfigure,
+ * the §9.1.10 Enable/Disable methods on the Status objects, and the agreement between the
+ * fragment's NodeIds and the ConfigurationObjects scheme returned from {@code CloseAndUpdate}.
  *
  * <p>Network safety: enabled connections use unicast 127.0.0.1 with ephemeral ports and an explicit
  * loopback {@code discoveryAddress}; the rebuild and ConfigurationObjects tests use disabled
@@ -127,7 +126,7 @@ class PubSubInfoModelWritableTest {
 
   @Test
   void enableDisableMethodsMintedOnlyWhenRemoteConfigurationEnabled() throws Exception {
-    // read-only exposure: no Enable/Disable methods (S8/S9 read-only posture preserved)
+    // read-only exposure: no Enable/Disable methods (read-only posture preserved)
     TestPubSubServer readOnlyServer = newServer();
     ServerPubSub readOnly =
         attach(
@@ -205,7 +204,7 @@ class PubSubInfoModelWritableTest {
 
   @Test
   void enableDisableRequireAuthorizedSession() throws Exception {
-    // session-less internal call is rejected regardless of authorizer (pin R9)
+    // session-less internal call is rejected regardless of authorizer
     TestPubSubServer server = newServer();
     ServerPubSub serverPubSub =
         attach(
@@ -242,7 +241,7 @@ class PubSubInfoModelWritableTest {
 
   // endregion
 
-  // region rebuild (pin R10)
+  // region rebuild
 
   @Test
   void reconfigureRebuildsConfigDerivedSubtrees() throws Exception {
@@ -323,7 +322,7 @@ class PubSubInfoModelWritableTest {
 
   // endregion
 
-  // region ConfigurationObjects agreement (pin R11)
+  // region ConfigurationObjects agreement
 
   @Test
   void configurationObjectNodeIdsMatchTheCloseAndUpdateScheme() throws Exception {
@@ -338,7 +337,7 @@ class PubSubInfoModelWritableTest {
             ServerPubSubOptions.builder().exposeInformationModel(true).build());
     serverPubSub.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // WP-X's toConfigurationObjects returns "PubSub/" + the applier's object path:
+    // toConfigurationObjects returns "PubSub/" + the applier's object path:
     //   connection = <name>, group = <conn>/<group>, writer = <conn>/<group>/<leaf>,
     //   published dataset = PublishedDataSets/<name>. The fragment must mint each config-derived
     //   component at exactly these NodeIds for the returned ids to resolve.
@@ -433,7 +432,7 @@ class PubSubInfoModelWritableTest {
   private static PubSubConnectionConfig disabledConnection(
       String connection, String group, String writer, Duration interval) {
     // disabled connections never bind a socket, so fixed deterministic ports keep the config
-    // stable across reconfigures (component config equality drives the incremental R10 rebuild)
+    // stable across reconfigures (component config equality drives the incremental rebuild)
     int base = 40000 + Math.floorMod(connection.hashCode(), 1000) * 2;
     // each connection gets its own deterministic publisherId so multi-connection configs (e.g. the
     // rebuild test's c1 + c2) keep their reused writerGroupId/dataSetWriterId in distinct

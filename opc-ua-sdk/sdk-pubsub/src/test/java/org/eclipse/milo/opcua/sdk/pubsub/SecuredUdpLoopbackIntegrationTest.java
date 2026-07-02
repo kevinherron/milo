@@ -79,13 +79,13 @@ import org.junit.jupiter.params.provider.MethodSource;
  * publisher service and a subscriber service, each with a {@link StaticSecurityKeyProvider} bound
  * for the shared SecurityGroup, exchanging signed/encrypted UADP NetworkMessages in-process.
  *
- * <p>Covers the full K2 subset matrix ({@code Aes128Ctr}, {@code Aes256Ctr}) x ({@code Sign},
- * {@code SignAndEncrypt}) with metadata-validated (REQUIRE_CONFIGURED) decode, a multi-writer
- * group, and clean security diagnostics on both sides; secured delta-frame and keep-alive traffic
- * (Part 14 §6.2.4.3 / §6.2.6.3 riding the §7.2.4.4.3.2 secured NetworkMessage form); and the K7
- * receive-mode matrix (Part 14 §7.2.4.3) end-to-end: lower-than-configured is dropped and counted
- * (SHALL), a None-configured reader drops secured messages counted, and higher-than-configured is
- * processed when the reader's group can supply keys (MAY).
+ * <p>Covers the full subset matrix ({@code Aes128Ctr}, {@code Aes256Ctr}) x ({@code Sign}, {@code
+ * SignAndEncrypt}) with metadata-validated (REQUIRE_CONFIGURED) decode, a multi-writer group, and
+ * clean security diagnostics on both sides; secured delta-frame and keep-alive traffic (Part 14
+ * §6.2.4.3 / §6.2.6.3 riding the §7.2.4.4.3.2 secured NetworkMessage form); and the receive-mode
+ * matrix (Part 14 §7.2.4.3) end-to-end: lower-than-configured is dropped and counted (SHALL), a
+ * None-configured reader drops secured messages counted, and higher-than-configured is processed
+ * when the reader's group can supply keys (MAY).
  *
  * <p>Network safety: every UDP connection pins an explicit loopback {@code discoveryAddress}, so
  * the engine's discovery channels never bind the well-known port 4840 or join the default {@code
@@ -169,8 +169,8 @@ class SecuredUdpLoopbackIntegrationTest {
   }
 
   /**
-   * The full K2 subset matrix over loopback UDP: both writers of a secured multi-writer group
-   * deliver metadata-validated events to their REQUIRE_CONFIGURED readers, a source update travels
+   * The full subset matrix over loopback UDP: both writers of a secured multi-writer group deliver
+   * metadata-validated events to their REQUIRE_CONFIGURED readers, a source update travels
    * end-to-end, and every security counter on both sides stays at zero — no decrypt, signature,
    * token, staleness, mode, decode, or sequence-window errors under organic secured traffic.
    */
@@ -604,8 +604,8 @@ class SecuredUdpLoopbackIntegrationTest {
   }
 
   /**
-   * The K7 receive-mode matrix (Part 14 §7.2.4.3) end-to-end against a REAL secured publisher: a
-   * Sign writer group and a SignAndEncrypt writer group publish to one subscriber hosting three
+   * The receive-mode matrix (Part 14 §7.2.4.3) end-to-end against a REAL secured publisher: a Sign
+   * writer group and a SignAndEncrypt writer group publish to one subscriber hosting three
    * differently configured readers. The None-configured reader drops the secured messages it
    * matches, counted, and stays healthy (SHALL); the SignAndEncrypt-configured reader matching the
    * Sign group drops lower-than-configured, counted (SHALL); the Sign-configured reader matching

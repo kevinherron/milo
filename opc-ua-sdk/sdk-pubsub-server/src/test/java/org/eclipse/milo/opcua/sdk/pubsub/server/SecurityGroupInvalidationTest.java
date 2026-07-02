@@ -20,9 +20,9 @@ import org.eclipse.milo.opcua.stack.core.types.structured.SecurityGroupDataType;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link RemoteConfigurationServer#securityGroupsToInvalidate} (pin R7 / Part 14
- * §6.2.12.2): only a {@code SecurityPolicyUri} or {@code KeyLifetime} change invalidates a
- * SecurityGroup's keys, and only for a group present before and after the change.
+ * Unit tests for {@link RemoteConfigurationServer#securityGroupsToInvalidate} (Part 14 §6.2.12.2):
+ * only a {@code SecurityPolicyUri} or {@code KeyLifetime} change invalidates a SecurityGroup's
+ * keys, and only for a group present before and after the change.
  */
 class SecurityGroupInvalidationTest {
 

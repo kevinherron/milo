@@ -92,8 +92,8 @@ public final class UadpMessageSecurity {
    * 157, the RFC 3686 convention).
    *
    * <p>Decode-side callers must operate on a copy of the payload region, not the shared transport
-   * buffer (the K5 decrypt-a-copy rule); encode-side callers own their output buffer and transform
-   * it in place.
+   * buffer (the decrypt-a-copy rule); encode-side callers own their output buffer and transform it
+   * in place.
    *
    * @param keyMaterial the key material; supplies the EncryptingKey and KeyNonce.
    * @param messageNonce the 8-byte MessageNonce from the SecurityHeader.

@@ -42,10 +42,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link ServerPubSub} lifecycle behavior per pinned decisions S2 and S10: attach is legal any time
- * after {@link org.eclipse.milo.opcua.sdk.server.OpcUaServer} construction and startup never
- * requires {@code server.startup()}; startup, shutdown, and close are idempotent; close after a
- * failed startup is tolerated.
+ * {@link ServerPubSub} lifecycle behavior: attach is legal any time after {@link
+ * org.eclipse.milo.opcua.sdk.server.OpcUaServer} construction and startup never requires {@code
+ * server.startup()}; startup, shutdown, and close are idempotent; close after a failed startup is
+ * tolerated.
  *
  * <p>Network safety: connections use unicast 127.0.0.1 with ephemeral ports and an explicit
  * loopback {@code discoveryAddress}, so the engine's discovery channels never touch the default

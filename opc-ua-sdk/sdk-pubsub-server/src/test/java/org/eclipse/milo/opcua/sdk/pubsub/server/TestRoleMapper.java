@@ -18,8 +18,8 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 /**
  * Minimal {@code RoleMapper} test fixture: maps every identity to a settable static role list.
  *
- * <p>Deliberately a test fixture and not shipped API (K17 non-goal; rbac survey Q8): Milo ships no
- * {@code RoleMapper} implementation, and the PubSub authorization default posture only needs the
+ * <p>Deliberately a test fixture and not shipped API: Milo ships no {@code RoleMapper}
+ * implementation, and the PubSub authorization default posture only needs the
  * configured-vs-unconfigured distinction plus the mapped role ids, both of which this fixture
  * exercises through the real {@code Session.getRoleIds()} path.
  */

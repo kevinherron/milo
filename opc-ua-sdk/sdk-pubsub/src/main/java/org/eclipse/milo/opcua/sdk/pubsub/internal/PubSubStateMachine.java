@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 /**
  * The Part 14 §6.2.1 PubSubState machine, applied to the {@link AbstractComponentRuntime} tree.
  *
- * <p>Transition rules (Table 2, plus the pinned resolution of its ambiguities):
+ * <p>Transition rules (Table 2, plus how its ambiguities are resolved here):
  *
  * <ul>
  *   <li>a disabled component is {@code Disabled}, regardless of its parent;

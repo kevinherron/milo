@@ -226,11 +226,11 @@ public record DecodedNetworkMessage(
    *     false} for a message whose decode ended before verification could run (no resolver, no
    *     resolvable keys, truncated before its signature) or whose signature did not verify — such a
    *     message is unauthenticated, so nothing it carries (its sequence number included) may affect
-   *     reader state (K18: only verified messages reach the Part 14 §7.2.3 sequence window). A
-   *     failure recorded on a {@code verified} message occurred <em>after</em> verification
-   *     (payload parsing, decryption structure, chunk consumption): its content is authentic and
-   *     flows the normal tolerant-decode path. Always {@code false} for the processed-as-unsecured
-   *     mode-None header (force-key-reset only): there is no signature to verify.
+   *     reader state (only verified messages reach the Part 14 §7.2.3 sequence window). A failure
+   *     recorded on a {@code verified} message occurred <em>after</em> verification (payload
+   *     parsing, decryption structure, chunk consumption): its content is authentic and flows the
+   *     normal tolerant-decode path. Always {@code false} for the processed-as-unsecured mode-None
+   *     header (force-key-reset only): there is no signature to verify.
    */
   public record Security(
       MessageSecurityMode mode,

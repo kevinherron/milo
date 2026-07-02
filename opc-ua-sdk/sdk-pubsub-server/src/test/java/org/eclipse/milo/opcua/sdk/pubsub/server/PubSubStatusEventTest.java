@@ -53,7 +53,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * R17 status-event bridge behavior: state changes emitted as the base {@code PubSubStatusEventType}
+ * Status-event bridge behavior: state changes emitted as the base {@code PubSubStatusEventType}
  * ({@code i=15535}), send failures as {@code PubSubCommunicationFailureEventType} ({@code
  * i=15563}), DISPOSE suppression, first-failure-per-episode suppression with recovery re-arm,
  * severity bands, field mapping, and the {@code statusEventsEnabled} gate.

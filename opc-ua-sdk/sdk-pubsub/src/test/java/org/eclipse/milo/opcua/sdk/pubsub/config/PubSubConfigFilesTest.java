@@ -38,7 +38,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.StandaloneSubscribedDa
 import org.eclipse.milo.opcua.stack.core.types.structured.WriterGroupDataType;
 import org.junit.jupiter.api.Test;
 
-/** Round-trip and error-path tests for {@link PubSubConfigFiles} (Phase 5 pin R19). */
+/** Round-trip and error-path tests for {@link PubSubConfigFiles}. */
 class PubSubConfigFilesTest {
 
   private final EncodingContext context = new DefaultEncodingContext();

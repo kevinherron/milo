@@ -50,10 +50,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests the R16 transport-state to {@code PubSubState} mapping through a fake transport-state
- * source (a stub transport that captures the {@link TransportStateListener} the engine hands it in
- * the open context) and the R12 listener-removal API. The connection uses an in-memory stub
- * transport for its data channels, so nothing touches the network.
+ * Tests the transport-state to {@code PubSubState} mapping through a fake transport-state source (a
+ * stub transport that captures the {@link TransportStateListener} the engine hands it in the open
+ * context) and the listener-removal API. The connection uses an in-memory stub transport for its
+ * data channels, so nothing touches the network.
  */
 class TransportStateMappingTest {
 
@@ -216,7 +216,7 @@ class TransportStateMappingTest {
   }
 
   /**
-   * Regression guard for the R16 disconnect/reconnect ordering race: when the transport executor
+   * Regression guard for the disconnect/reconnect ordering race: when the transport executor
    * reorders two independently-submitted callbacks (as the default multi-threaded {@code
    * Stack.sharedExecutor()} may), the engine must still apply an in-order disconnect+reconnect pair
    * so the connection ends in the state that reflects actual connectivity (Operational), not

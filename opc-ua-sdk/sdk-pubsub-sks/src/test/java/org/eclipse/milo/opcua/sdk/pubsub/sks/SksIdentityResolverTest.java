@@ -122,7 +122,7 @@ class SksIdentityResolverTest {
     Optional<IdentityProvider> identity =
         SksIdentityResolver.resolve(entry, endpoint, EMPTY_STORE, VALIDATOR);
 
-    // Anonymous is NOT listed by the entry: never silently downgrade (pinned rule).
+    // Anonymous is NOT listed by the entry: never silently downgrade.
     assertTrue(identity.isEmpty());
   }
 

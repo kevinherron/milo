@@ -92,11 +92,11 @@ import org.slf4j.LoggerFactory;
  * merging. The subscriber window retains one previous token plus the current and future tokens (the
  * §8.3.2 overlap allowance); a token id below the window is a past key and is never re-fetched.
  *
- * <p><b>K8 policy precedence</b>: the provider-returned {@link SecurityKeySet#securityPolicyUri()}
+ * <p><b>Policy precedence</b>: the provider-returned {@link SecurityKeySet#securityPolicyUri()}
  * must be a supported policy and must equal every registering component's configured policy URI
  * (when one is configured), else the fetch is treated as <b>failed</b> — key material is never
- * silently used under a different security level than the operator pinned. The same gate runs at
- * {@link #register} time against keys already held, so a component registering after the fetch
+ * silently used under a different security level than the operator configured. The same gate runs
+ * at {@link #register} time against keys already held, so a component registering after the fetch
  * completed fails with {@code Bad_ConfigurationError} instead of silently adopting the held policy.
  *
  * <p><b>Nonce state</b>: each token carries its own nonce state — 4 random bytes generated when the
@@ -188,11 +188,11 @@ final class SecurityKeyManager {
    * @param ref the SecurityGroupRef the component consumes keys for.
    * @param component the consuming component runtime (a writer or reader group).
    * @param configuredPolicyUri the component's effective configured policy URI, or {@code null}
-   *     when the configuration does not constrain the policy (K8: any supported provider policy is
-   *     then accepted).
+   *     when the configuration does not constrain the policy (any supported provider policy is then
+   *     accepted).
    * @throws UaException with {@code Bad_ConfigurationError} if no {@link SecurityKeyProvider} is
    *     bound for {@code ref}, or if keys are already held under a policy that does not match
-   *     {@code configuredPolicyUri} (the K8 gate at registration time).
+   *     {@code configuredPolicyUri} (the policy gate at registration time).
    */
   void register(
       SecurityGroupConfig group,
@@ -217,7 +217,7 @@ final class SecurityKeyManager {
    * @param component the consuming component runtime (a writer or reader group).
    * @throws UaException with {@code Bad_ConfigurationError} if any ref has no bound {@link
    *     SecurityKeyProvider}, or already holds keys under a policy mismatching that ref's
-   *     configured URI (the K8 gate at registration time).
+   *     configured URI (the policy gate at registration time).
    */
   void registerAll(List<Registration> registrations, AbstractComponentRuntime component)
       throws UaException {
@@ -247,10 +247,11 @@ final class SecurityKeyManager {
           continue;
         }
 
-        // The K8 gate at registration time: the fetch-completion gate (validateKeySet) only sees
+        // The policy gate at registration time: the fetch-completion gate (validateKeySet) only
+        // sees
         // the consumers registered when the fetch completes, so a component registering after keys
         // are already held must be validated here — otherwise it would silently operate under the
-        // held policy instead of the URI the operator pinned, until the next fetch at the
+        // held policy instead of the URI the operator configured, until the next fetch at the
         // earliest.
         PubSubSecurityPolicy heldPolicy = state.policy;
         String configuredPolicyUri = registration.configuredPolicyUri();
@@ -416,7 +417,7 @@ final class SecurityKeyManager {
 
   /**
    * Look up the key material for a received SecurityTokenId within {@code ref}'s token window.
-   * SecurityTokenId 0 — the literal Table 154 sign-only SecurityHeader form K4 accepts on decode —
+   * SecurityTokenId 0 — the literal Table 154 sign-only SecurityHeader form accepted on decode —
    * resolves to the currently active key (token ids are 1-based, so 0 never names a real token).
    * Called on the connection dispatch thread; never blocks — an unknown token triggers an
    * asynchronous refresh (single-flight, rate-limited per {@link #wireTriggerAllowedLocked}) and
@@ -440,10 +441,10 @@ final class SecurityKeyManager {
         long now = nanoClock.getAsLong();
 
         if (token == 0 && state.haveKeys) {
-          // K4 accepts the literal Table 154 sign-only SecurityHeader form (SecurityTokenId 0,
-          // empty nonce). Token ids are 1-based (§8.3.2: they start at 1 and restart at 1 after
-          // wrapping), so 0 never names a real token: treat it as naming the currently active
-          // key (for the static-key form that is the single static token).
+          // the decoder accepts the literal Table 154 sign-only SecurityHeader form
+          // (SecurityTokenId 0, empty nonce). Token ids are 1-based (§8.3.2: they start at 1 and
+          // restart at 1 after wrapping), so 0 never names a real token: treat it as naming the
+          // currently active key (for the static-key form that is the single static token).
           token = activeTokenId(state, now);
         }
 
@@ -456,7 +457,7 @@ final class SecurityKeyManager {
         }
 
         if (state.haveKeys && token < state.window.firstKey()) {
-          // a past key no longer held: never re-fetched (K6)
+          // a past key no longer held: never re-fetched
           return new SubscriberKey(null, SubscriberKeyReason.STALE_KEY);
         }
 
@@ -476,7 +477,7 @@ final class SecurityKeyManager {
   /**
    * Handle a received force-key-reset signal (SecurityFlags bit 3, Table 154): the publisher is
    * about to invalidate its keys, so proactively refresh (single-flight and rate-limited like the
-   * unknown-token trigger — the bit rides an unauthenticated plaintext header; K6 subscriber side).
+   * unknown-token trigger — the bit rides an unauthenticated plaintext header; subscriber side).
    */
   void forceKeyReset(SecurityGroupRef ref) {
     synchronized (lock) {
@@ -502,8 +503,8 @@ final class SecurityKeyManager {
    * single-flight fetch on the scheduler. Registered consumers stay registered; the fetch
    * completion re-completes/recovers them through the normal {@link #applyKeySet} path (a fetch
    * returning key material under a policy that no longer matches a consumer's configured URI fails
-   * the K8 gate, so the group correctly refuses stale-policy keys until the provider serves the new
-   * policy). No-op if {@code ref} has no live key state (an unsecured group, or no consumer has
+   * the policy gate, so the group correctly refuses stale-policy keys until the provider serves the
+   * new policy). No-op if {@code ref} has no live key state (an unsecured group, or no consumer has
    * registered for it).
    *
    * <p>Called off the engine lock (never across I/O) after a successful reconfigure that changed
@@ -555,8 +556,8 @@ final class SecurityKeyManager {
 
   /**
    * The current token id and time to the next key switch of {@code ref}, or {@code null} when no
-   * keys are available: the feed for the Phase 5 R13 {@code SecurityTokenID} / {@code
-   * TimeToNextTokenID} LiveValues.
+   * keys are available: the feed for the {@code SecurityTokenID} / {@code TimeToNextTokenID}
+   * LiveValues.
    */
   @Nullable TokenInfo tokenInfo(SecurityGroupRef ref) {
     synchronized (lock) {
@@ -701,7 +702,7 @@ final class SecurityKeyManager {
     CompletableFuture<SecurityKeySet> future;
     try {
       // StartingTokenId 0 always: "Publishers using a central SKS shall call GetSecurityKeys
-      // always with StartingTokenId set to 0" (§8.3.2); past keys are never re-fetched (K6)
+      // always with StartingTokenId set to 0" (§8.3.2); past keys are never re-fetched
       future = provider.getKeys(securityGroupId, uint(0), requestedKeyCount);
     } catch (RuntimeException e) {
       future = CompletableFuture.failedFuture(e);
@@ -763,9 +764,9 @@ final class SecurityKeyManager {
   }
 
   /**
-   * The K8 gate: the provider-returned policy URI must be supported and must match every consumer's
-   * configured URI (when configured). Returns an error message, or null when valid. Must be called
-   * holding {@link #lock}.
+   * The policy gate: the provider-returned policy URI must be supported and must match every
+   * consumer's configured URI (when configured). Returns an error message, or null when valid. Must
+   * be called holding {@link #lock}.
    */
   private static @Nullable String validateKeySet(GroupKeyState state, SecurityKeySet keySet) {
     Optional<PubSubSecurityPolicy> policy =
@@ -778,7 +779,7 @@ final class SecurityKeyManager {
         state.consumers.entrySet()) {
       String configuredUri = consumer.getValue();
       if (configuredUri != null && !configuredUri.equals(keySet.securityPolicyUri())) {
-        // never silently downgrade/re-key: a mismatching provider policy fails the fetch (K8)
+        // never silently downgrade/re-key: a mismatching provider policy fails the fetch
         return ("security key fetch failed: provider returned policy '%s' but '%s' is configured"
                 + " for '%s'")
             .formatted(keySet.securityPolicyUri(), configuredUri, consumer.getKey().path());
@@ -873,7 +874,7 @@ final class SecurityKeyManager {
       if (!allKeysAvailableLocked(component, now)) {
         // a multi-ref component with another ref still lacking usable keys is neither started
         // nor recovered by this fetch — and its failure markers are deliberately NOT consumed:
-        // the later good fetch of the outstanding ref performs the recovery (K6)
+        // the later good fetch of the outstanding ref performs the recovery
         continue;
       }
       boolean failed = clearFailedMarkersLocked(component);
@@ -1014,7 +1015,7 @@ final class SecurityKeyManager {
   }
 
   /**
-   * Retire tokens that left the retention window {previous, current, futures} (K6). Must be called
+   * Retire tokens that left the retention window {previous, current, futures}. Must be called
    * holding {@link #lock}.
    */
   private void pruneWindow(GroupKeyState state, long currentTokenId) {
