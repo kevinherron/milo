@@ -24,6 +24,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubHandle;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetMetaDataMapper;
 import org.eclipse.milo.opcua.sdk.pubsub.config.MetadataPolicy;
@@ -242,6 +243,25 @@ final class DiscoveryRuntime {
         announcedMetaData.putAll(deriveLiveMetaData());
       }
     }
+  }
+
+  /**
+   * Close the discovery channels if discovery is no longer required — a reconfiguration removed the
+   * last writer group (responder leg) or the last {@link MetadataPolicy#REQUEST_IF_MISSING} reader
+   * (subscriber leg) that needed them. The open path is lazy and one-way ({@link #ensureChannels()}
+   * only ever opens), so this is the symmetric close, joining channel close like the data channels.
+   * Idempotent and safe when discovery is still required (no-op) or never opened. Called under the
+   * engine lock.
+   */
+  void closeChannelsIfUnneeded() {
+    if (!discoveryRequired()) {
+      closeChannels();
+    }
+  }
+
+  /** Whether either discovery channel is currently open. A test seam. */
+  boolean channelsOpen() {
+    return sendChannel != null || receiveChannel != null;
   }
 
   /** Close any open discovery channels; idempotent. Called under the engine lock. */
@@ -596,28 +616,45 @@ final class DiscoveryRuntime {
     ByteBuf data = encoded.data();
 
     if (discoveryChannel != null && dataChannel != null) {
-      send(dataChannel, data.retainedDuplicate(), "data");
-      send(discoveryChannel, data, "discovery");
+      send(dataChannel, data.retainedDuplicate(), "data", connection::publisherChannel);
+      send(discoveryChannel, data, "discovery", () -> sendChannel);
     } else if (discoveryChannel != null) {
-      send(discoveryChannel, data, "discovery");
+      send(discoveryChannel, data, "discovery", () -> sendChannel);
     } else {
-      send(dataChannel, data, "data");
+      send(dataChannel, data, "data", connection::publisherChannel);
     }
 
     service.getDiagnostics().networkMessageSent(connection.path());
   }
 
-  private void send(PublisherChannel channel, ByteBuf data, String leg) {
+  /**
+   * Send one leg of an announcement and record any failure. {@code liveChannel} supplies the leg's
+   * currently-open channel at completion time; a mismatch means the channel was closed or replaced
+   * by a teardown (dispose, or a reconfigure-removal close via {@link #closeChannelsIfUnneeded()})
+   * while the send was in flight, so the failure is suppressed rather than surfaced as a spurious
+   * operational error — mirroring how the data ({@code WriterGroupRuntime}) and metadata ({@code
+   * MetaDataPublisher}) paths key teardown off channel identity rather than the {@code disposed}
+   * flag alone (the latter misses reconfigure-removal, which never sets {@code disposed}).
+   */
+  private void send(
+      PublisherChannel channel,
+      ByteBuf data,
+      String leg,
+      Supplier<@Nullable PublisherChannel> liveChannel) {
     channel
         .send(data)
         .whenComplete(
             (v, ex) -> {
-              if (ex != null) {
+              // un-flatten to the transport's real status, and stay silent when the channel is no
+              // longer live (disposed, or closed by a reconfigure-removal — not an operational
+              // failure)
+              if (ex != null && !disposed && channel == liveChannel.get()) {
                 service
                     .getDiagnostics()
                     .error(
                         connection.path(),
-                        new StatusCode(StatusCodes.Bad_CommunicationError),
+                        UaException.extractStatusCode(ex)
+                            .orElse(new StatusCode(StatusCodes.Bad_CommunicationError)),
                         "failed to send discovery NetworkMessage (%s leg): %s"
                             .formatted(leg, ex.getMessage()),
                         ex);
@@ -894,12 +931,16 @@ final class DiscoveryRuntime {
           .send(encoded.data())
           .whenComplete(
               (v, ex) -> {
-                if (ex != null) {
+                // stay silent when the send channel is no longer live (disposed, or closed by a
+                // reconfigure-removal); the captured channel differing from the current sendChannel
+                // means a clean teardown raced the in-flight probe, not an operational failure
+                if (ex != null && !disposed && channel == sendChannel) {
                   service
                       .getDiagnostics()
                       .error(
                           readerPath,
-                          new StatusCode(StatusCodes.Bad_CommunicationError),
+                          UaException.extractStatusCode(ex)
+                              .orElse(new StatusCode(StatusCodes.Bad_CommunicationError)),
                           "failed to send discovery probe: " + ex.getMessage(),
                           ex);
                 }

@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubBindings;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubHandle;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.config.BrokerTransportSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
@@ -62,6 +63,7 @@ import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.BrokerTransportQualityOfService;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -458,14 +460,22 @@ class MqttTransportConfigTest {
     // completes even though the broker is unreachable
     service.startup().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
-    // every publish fails fast (Bad_ServerNotConnected from the channel) and is recorded by
-    // the engine as a send failure on the writer group path
+    // the initial connect to the unreachable broker fails, which the transport reports (R16): the
+    // connection moves to Error and its writer group pauses. Any publish cycle that raced ahead of
+    // the disconnect recorded the channel's real, un-flattened status (Bad_ServerNotConnected),
+    // no longer the former blanket Bad_CommunicationError.
+    PubSubHandle pubConn = service.components().connection("pub-conn").orElseThrow();
     awaitTrue(
-        () -> {
-          var error = lastError(service, "pub-conn/grp");
-          return error != null && error.value() == StatusCodes.Bad_CommunicationError;
-        },
-        "Bad_CommunicationError diagnostics on the writer group");
+        () -> service.state(pubConn) == PubSubState.Error,
+        "publisher connection to enter Error against an unreachable broker");
+
+    var groupError = lastError(service, "pub-conn/grp");
+    if (groupError != null) {
+      assertEquals(
+          StatusCodes.Bad_ServerNotConnected,
+          groupError.value(),
+          "send failures must carry the transport's real (un-flattened) status");
+    }
 
     // and shutdown completes promptly despite the broker never having been reachable
     service.shutdown().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);

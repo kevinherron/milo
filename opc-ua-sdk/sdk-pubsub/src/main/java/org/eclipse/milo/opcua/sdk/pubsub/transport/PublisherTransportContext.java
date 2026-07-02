@@ -12,6 +12,7 @@ package org.eclipse.milo.opcua.sdk.pubsub.transport;
 
 import io.netty.channel.EventLoopGroup;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConnectionConfig;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Context for {@link TransportProvider#openPublisher(PublisherTransportContext)}.
@@ -22,14 +23,19 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConnectionConfig;
  *
  * @param connection the config of the connection the channel is opened for.
  * @param eventLoopGroup the Netty {@link EventLoopGroup} the channel must use for I/O.
- * @apiNote Create instances via {@link #of(PubSubConnectionConfig, EventLoopGroup)} rather than the
+ * @param transportStateListener an optional engine callback the provider may invoke to report
+ *     connectivity changes (see {@link TransportStateListener}), or {@code null} when the engine
+ *     supplied none. A provider that does not track connectivity ignores it.
+ * @apiNote Create instances via one of the {@code of(...)} factory methods rather than the
  *     canonical constructor; the factory methods are stable while the canonical constructor is not.
  */
 public record PublisherTransportContext(
-    PubSubConnectionConfig connection, EventLoopGroup eventLoopGroup) {
+    PubSubConnectionConfig connection,
+    EventLoopGroup eventLoopGroup,
+    @Nullable TransportStateListener transportStateListener) {
 
   /**
-   * Create a {@link PublisherTransportContext}.
+   * Create a {@link PublisherTransportContext} without a transport-state listener.
    *
    * @param connection the config of the connection the channel is opened for.
    * @param eventLoopGroup the Netty {@link EventLoopGroup} the channel must use for I/O.
@@ -38,6 +44,23 @@ public record PublisherTransportContext(
   public static PublisherTransportContext of(
       PubSubConnectionConfig connection, EventLoopGroup eventLoopGroup) {
 
-    return new PublisherTransportContext(connection, eventLoopGroup);
+    return new PublisherTransportContext(connection, eventLoopGroup, null);
+  }
+
+  /**
+   * Create a {@link PublisherTransportContext}.
+   *
+   * @param connection the config of the connection the channel is opened for.
+   * @param eventLoopGroup the Netty {@link EventLoopGroup} the channel must use for I/O.
+   * @param transportStateListener an optional engine callback the provider may invoke to report
+   *     connectivity changes, or {@code null} to supply none.
+   * @return a new {@link PublisherTransportContext}.
+   */
+  public static PublisherTransportContext of(
+      PubSubConnectionConfig connection,
+      EventLoopGroup eventLoopGroup,
+      @Nullable TransportStateListener transportStateListener) {
+
+    return new PublisherTransportContext(connection, eventLoopGroup, transportStateListener);
   }
 }

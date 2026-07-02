@@ -519,6 +519,11 @@ public final class PubSubServiceImpl implements PubSubService {
     for (ConnectionRuntime connection : connections.values()) {
       DiscoveryRuntime discovery = connection.discoveryRuntime();
       if (discovery != null) {
+        // a reconfigure that removed the last writer group (responder leg) or last
+        // REQUEST_IF_MISSING reader (subscriber leg) leaves discovery no longer required; join
+        // channel close like the data channels rather than leaving them open one-way
+        discovery.closeChannelsIfUnneeded();
+
         if (connection != previousRuntimes.get(connection.config().name())) {
           // rebuilt connection: restore the predecessor's baseline so the check below compares
           // against what was actually last announced rather than the post-change config
@@ -892,6 +897,32 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   @Override
+  public void removeDataSetListener(DataSetListener listener) {
+    eventDispatcher.removeDataSetListener(requireNonNull(listener, "listener"));
+  }
+
+  @Override
+  public void removeDataSetListener(DataSetReaderRef reader, DataSetListener listener) {
+    requireNonNull(reader, "reader");
+    eventDispatcher.removeDataSetListener(reader, requireNonNull(listener, "listener"));
+  }
+
+  @Override
+  public void removeStateListener(PubSubStateListener listener) {
+    eventDispatcher.removeStateListener(requireNonNull(listener, "listener"));
+  }
+
+  @Override
+  public void removeMetaDataListener(MetaDataListener listener) {
+    eventDispatcher.removeMetaDataListener(requireNonNull(listener, "listener"));
+  }
+
+  @Override
+  public void removeDiagnosticsListener(PubSubDiagnosticsListener listener) {
+    eventDispatcher.removeDiagnosticsListener(requireNonNull(listener, "listener"));
+  }
+
+  @Override
   public PubSubDiagnostics diagnostics() {
     return diagnostics;
   }
@@ -904,10 +935,16 @@ public final class PubSubServiceImpl implements PubSubService {
       AbstractComponentRuntime component,
       PubSubState oldState,
       PubSubState newState,
-      StatusCode statusCode) {
+      StatusCode statusCode,
+      PubSubStateChangeEvent.Cause cause) {
+
+    // update the Part 14 §9.1.11 State* counters (under the engine lock, so the remembered
+    // operational trigger read here is the one set on this component's PreOperational entry)
+    diagnostics.recordStateChange(
+        component.path(), oldState, newState, cause, component.operationalTrigger());
 
     eventDispatcher.notifyStateChange(
-        new PubSubStateChangeEvent(component.handle(), oldState, newState, statusCode));
+        new PubSubStateChangeEvent(component.handle(), oldState, newState, statusCode, cause));
   }
 
   private void registerTree(AbstractComponentRuntime component) {
@@ -924,6 +961,13 @@ public final class PubSubServiceImpl implements PubSubService {
 
   PubSubConfig getConfig() {
     return config;
+  }
+
+  /** The current {@link ConnectionRuntime} for {@code name}, or {@code null}. A test seam. */
+  @Nullable ConnectionRuntime connectionRuntime(String name) {
+    synchronized (lock) {
+      return connections.get(name);
+    }
   }
 
   PubSubServiceConfig getServiceConfig() {

@@ -13,6 +13,7 @@ package org.eclipse.milo.opcua.sdk.pubsub.internal;
 import java.util.List;
 import org.eclipse.milo.opcua.sdk.pubsub.ComponentType;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubHandle;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubStateChangeEvent.Cause;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.jspecify.annotations.Nullable;
@@ -33,6 +34,14 @@ abstract class AbstractComponentRuntime {
 
   private volatile boolean enabled;
   private volatile PubSubState state = PubSubState.Disabled;
+
+  /**
+   * The trigger ({@code METHOD} or {@code PARENT}) that last moved this component into {@code
+   * PreOperational}, remembered so the eventual {@code Operational} transition can be attributed to
+   * {@code StateOperationalByMethod} or {@code StateOperationalByParent}. Only touched by {@link
+   * PubSubStateMachine} and the state-change listener, both under the engine lock.
+   */
+  private @Nullable Cause operationalTrigger;
 
   AbstractComponentRuntime(
       ComponentType componentType,
@@ -73,6 +82,19 @@ abstract class AbstractComponentRuntime {
   /** Set the current state. Only called by {@link PubSubStateMachine} under the engine lock. */
   final void setState(PubSubState state) {
     this.state = state;
+  }
+
+  /**
+   * The remembered {@code PreOperational}-entry trigger for state-counter attribution, or {@code
+   * null} if none has been recorded. Read under the engine lock.
+   */
+  final @Nullable Cause operationalTrigger() {
+    return operationalTrigger;
+  }
+
+  /** Remember the {@code PreOperational}-entry trigger. Set by {@link PubSubStateMachine}. */
+  final void setOperationalTrigger(Cause cause) {
+    this.operationalTrigger = cause;
   }
 
   /** The direct children of this component; empty for leaves. */

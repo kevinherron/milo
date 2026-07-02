@@ -609,19 +609,21 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
     try {
       encodedMessages = mapping.encode(encodeContext);
     } catch (Exception e) {
+      StatusCode statusCode = statusCodeOf(e);
+      String message = "failed to encode NetworkMessage: " + e.getMessage();
       if (securityContext != null) {
         // encryption, signing, and nonce composition are inline with the encode of a secured
-        // NetworkMessage: a secured encode failure counts as an encryption error (K6)
-        service
-            .getDiagnostics()
-            .encryptionError(
-                path(), statusCodeOf(e), "failed to encode NetworkMessage: " + e.getMessage(), e);
+        // NetworkMessage: a secured encode failure counts as an encryption error (K6), the WG
+        // counter closest to the failure (not additionally as a FailedTransmission)
+        service.getDiagnostics().encryptionError(path(), statusCode, message, e);
       } else {
-        service
-            .getDiagnostics()
-            .error(
-                path(), statusCodeOf(e), "failed to encode NetworkMessage: " + e.getMessage(), e);
+        // a plaintext encode failure is a NetworkMessage that never transmitted
+        // (R14/FailedTransmissions)
+        service.getDiagnostics().failedTransmission(path(), statusCode, message, e);
       }
+      // every DataSetMessage this partition would have carried was never sent: attribute a
+      // FailedDataSetMessage to each contributing writer (Part 14 Table 328, R14)
+      recordFailedDataSetMessages(partition);
       // nothing of this partition was transmitted
       invalidateDeltaBaselines(partition, List.of(), notTransmitted);
       return;
@@ -645,13 +647,10 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
             .whenComplete(
                 (v, ex) -> {
                   if (ex != null) {
-                    service
-                        .getDiagnostics()
-                        .error(
-                            path(),
-                            new StatusCode(StatusCodes.Bad_CommunicationError),
-                            "failed to send NetworkMessage: " + ex.getMessage(),
-                            ex);
+                    // the transport reported the real status; record it (un-flattened) unless the
+                    // channel is closing on a clean shutdown/disable/reconfigure-removal, in which
+                    // case this is teardown noise and no counter/lastError/event is ticked
+                    recordSendFailure(channel, encoded.writers(), ex);
                     // not transmitted; may run on a transport thread, after later cycles —
                     // invalidateDeltaBaseline is the thread-safe seam and heals at the latest
                     // one cycle after it lands (lastSentNanos is NOT rewound: the message was
@@ -676,16 +675,22 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
         encodedMessages.get(i).data().release();
       }
       // neither the message whose send threw nor the unsent remainder was transmitted
+      boolean teardown = connection.publisherChannel() != channel;
+      StatusCode statusCode = sendFailureStatus(e);
       for (int i = index; i < encodedMessages.size(); i++) {
-        invalidateDeltaBaselines(partition, encodedMessages.get(i).writers(), notTransmitted);
+        EncodedNetworkMessage encoded = encodedMessages.get(i);
+        invalidateDeltaBaselines(partition, encoded.writers(), notTransmitted);
+        if (!teardown) {
+          recordFailedDataSetMessages(encoded.writers());
+        }
       }
-      service
-          .getDiagnostics()
-          .error(
-              path(),
-              new StatusCode(StatusCodes.Bad_CommunicationError),
-              "failed to send NetworkMessage: " + e.getMessage(),
-              e);
+      if (!teardown) {
+        // one FailedTransmission event for the synchronous send throw (un-flattened status)
+        service
+            .getDiagnostics()
+            .failedTransmission(
+                path(), statusCode, "failed to send NetworkMessage: " + e.getMessage(), e);
+      }
       return;
     }
 
@@ -905,5 +910,57 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
 
   private static StatusCode statusCodeOf(Exception e) {
     return UaException.extractStatusCode(e).orElse(new StatusCode(StatusCodes.Bad_InternalError));
+  }
+
+  /**
+   * The status code of a send failure: the real transport/channel status when the failure carries
+   * one (un-flattened, replacing the former blanket {@code Bad_CommunicationError}), otherwise
+   * {@code Bad_CommunicationError} as the transport-agnostic default.
+   */
+  private static StatusCode sendFailureStatus(Throwable ex) {
+    return UaException.extractStatusCode(ex)
+        .orElse(new StatusCode(StatusCodes.Bad_CommunicationError));
+  }
+
+  /**
+   * Record an asynchronous per-NetworkMessage send failure: the transport's real status is recorded
+   * as a {@code FailedTransmission} (with a {@code FailedDataSetMessage} per attributed writer),
+   * unless the connection's publisher channel is no longer {@code channel} — i.e. it was closed on
+   * a clean shutdown, disable, or reconfigure-removal, in which case the failure is
+   * channel-teardown noise and no counter, {@code lastError}, or diagnostics event is ticked (Phase
+   * 5 send-failure cleanup). Runs on a transport-completion thread.
+   */
+  private void recordSendFailure(
+      PublisherChannel channel, List<EncodedNetworkMessage.Writer> attribution, Throwable ex) {
+
+    if (connection.publisherChannel() != channel) {
+      return;
+    }
+    service
+        .getDiagnostics()
+        .failedTransmission(
+            path(), sendFailureStatus(ex), "failed to send NetworkMessage: " + ex.getMessage(), ex);
+    recordFailedDataSetMessages(attribution);
+  }
+
+  /**
+   * Attribute a {@code FailedDataSetMessage} to every writer that contributed a DataSetMessage to a
+   * partition whose NetworkMessage was never sent (encode failure), per Part 14 Table 328 (R14).
+   */
+  private void recordFailedDataSetMessages(Partition partition) {
+    for (DataSetWriterRuntime contributor : partition.contributors) {
+      service.getDiagnostics().failedDataSetMessage(contributor.path());
+    }
+  }
+
+  /**
+   * Attribute a {@code FailedDataSetMessage} to every writer a not-sent NetworkMessage carried
+   * (send failure). An empty attribution — a custom mapping that does not attribute writers — ticks
+   * none; the group-level {@code FailedTransmission} still counted the message.
+   */
+  private void recordFailedDataSetMessages(List<EncodedNetworkMessage.Writer> attribution) {
+    for (EncodedNetworkMessage.Writer writer : attribution) {
+      service.getDiagnostics().failedDataSetMessage(path() + "/" + writer.name());
+    }
   }
 }

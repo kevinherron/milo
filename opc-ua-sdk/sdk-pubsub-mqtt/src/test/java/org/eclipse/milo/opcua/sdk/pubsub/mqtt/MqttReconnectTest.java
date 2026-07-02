@@ -13,7 +13,6 @@ package org.eclipse.milo.opcua.sdk.pubsub.mqtt;
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.TIMEOUT;
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.awaitEvent;
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.awaitTrue;
-import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.lastError;
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.mapSource;
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.mqttServiceConfig;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
@@ -109,13 +108,20 @@ class MqttReconnectTest {
       throw e;
     }
 
-    // stop the broker: sends start failing into diagnostics (the transport has no
-    // connection-state callback in this version, so PubSubState is not asserted here)
+    // stop the broker: the transport reports the disconnect (R16), so the publisher connection
+    // fails into Error and its writer group cascades to Paused, stopping publishing
     firstBroker.stop();
 
+    PubSubHandle pubConn = publisher.components().connection("pub-conn").orElseThrow();
+    PubSubHandle pubGroup = publisher.components().writerGroup("pub-conn", "grp").orElseThrow();
+
     awaitTrue(
-        () -> lastError(publisher, "pub-conn/grp") != null,
-        "publisher send failures recorded after broker stop",
+        () -> publisher.state(pubConn) == PubSubState.Error,
+        "publisher connection to enter Error after broker stop",
+        Duration.ofSeconds(30));
+    awaitTrue(
+        () -> publisher.state(pubGroup) == PubSubState.Paused,
+        "publisher writer group to Pause after broker stop",
         Duration.ofSeconds(30));
 
     events.clear();
@@ -128,6 +134,13 @@ class MqttReconnectTest {
       DataSetReceivedEvent event = awaitEvent(events, e -> true, RESUME_TIMEOUT);
       assertEquals(ushort(1), event.dataSetWriterId());
       assertEquals(21.5, event.fieldsByName().get("temperature").value().value());
+
+      // the publisher connection recovers to Operational on reconnect (R16), re-activating its
+      // writer group (which resumes publishing and re-publishes retained metadata)
+      awaitTrue(
+          () -> publisher.state(pubConn) == PubSubState.Operational,
+          "publisher connection Operational after broker restart",
+          Duration.ofSeconds(30));
 
       // the reader settles (back) into Operational
       PubSubHandle reader =

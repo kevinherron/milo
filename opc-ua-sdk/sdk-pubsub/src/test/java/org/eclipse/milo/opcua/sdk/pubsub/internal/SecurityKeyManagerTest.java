@@ -81,7 +81,7 @@ class SecurityKeyManagerTest {
   private final PubSubStateMachine stateMachine =
       new PubSubStateMachine(
           engineLock,
-          (component, oldState, newState, statusCode) ->
+          (component, oldState, newState, statusCode, cause) ->
               transitions.add(new Transition(component.path(), oldState, newState)));
 
   private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();

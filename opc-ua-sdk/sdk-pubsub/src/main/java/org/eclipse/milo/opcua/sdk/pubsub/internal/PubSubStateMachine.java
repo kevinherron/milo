@@ -11,6 +11,7 @@
 package org.eclipse.milo.opcua.sdk.pubsub.internal;
 
 import java.util.Collection;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubStateChangeEvent.Cause;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
@@ -61,7 +62,8 @@ final class PubSubStateMachine {
         AbstractComponentRuntime component,
         PubSubState oldState,
         PubSubState newState,
-        StatusCode statusCode);
+        StatusCode statusCode,
+        Cause cause);
   }
 
   /**
@@ -73,14 +75,15 @@ final class PubSubStateMachine {
 
     synchronized (lock) {
       rootOperational = operational;
-      connections.forEach(this::recompute);
+      // connections change because their (implicit root) parent changed: PARENT-driven
+      connections.forEach(connection -> recompute(connection, Cause.PARENT));
     }
   }
 
   /** Compute the initial state of a newly registered component (and its descendants). */
   void initialize(AbstractComponentRuntime component) {
     synchronized (lock) {
-      recompute(component);
+      recompute(component, Cause.PARENT);
     }
   }
 
@@ -91,7 +94,9 @@ final class PubSubStateMachine {
         return;
       }
       component.setEnabled(enabled);
-      recompute(component);
+      // the component whose enabled intent changed transitions by METHOD; its descendants,
+      // recomputed below, transition by PARENT
+      recompute(component, Cause.METHOD);
     }
   }
 
@@ -107,7 +112,7 @@ final class PubSubStateMachine {
     synchronized (lock) {
       PubSubState state = component.state();
       if (state == PubSubState.PreOperational || state == PubSubState.Operational) {
-        apply(component, PubSubState.Error, statusCode);
+        apply(component, PubSubState.Error, statusCode, Cause.ERROR_RECOVERY);
         return true;
       }
       return false;
@@ -118,7 +123,7 @@ final class PubSubStateMachine {
   void recover(AbstractComponentRuntime component) {
     synchronized (lock) {
       if (component.state() == PubSubState.Error) {
-        apply(component, PubSubState.Operational, StatusCode.GOOD);
+        apply(component, PubSubState.Operational, StatusCode.GOOD, Cause.ERROR_RECOVERY);
       }
     }
   }
@@ -127,7 +132,7 @@ final class PubSubStateMachine {
   void startupCompleted(AbstractComponentRuntime component) {
     synchronized (lock) {
       if (component.state() == PubSubState.PreOperational) {
-        apply(component, PubSubState.Operational, StatusCode.GOOD);
+        apply(component, PubSubState.Operational, StatusCode.GOOD, Cause.STARTUP);
       }
     }
   }
@@ -150,7 +155,7 @@ final class PubSubStateMachine {
     PubSubState oldState = component.state();
     if (oldState != PubSubState.Disabled) {
       component.setState(PubSubState.Disabled);
-      notifyListener(component, oldState, PubSubState.Disabled, StatusCode.GOOD);
+      notifyListener(component, oldState, PubSubState.Disabled, StatusCode.GOOD, Cause.DISPOSE);
 
       if (isActive(oldState)) {
         deactivateQuietly(component);
@@ -158,7 +163,12 @@ final class PubSubStateMachine {
     }
   }
 
-  private void recompute(AbstractComponentRuntime component) {
+  /**
+   * Recompute a component's state. {@code cause} is the trigger for <em>this</em> component (METHOD
+   * when its own enabled intent changed, PARENT when its parent's state changed); its descendants
+   * are always recomputed with {@link Cause#PARENT}.
+   */
+  private void recompute(AbstractComponentRuntime component, Cause cause) {
     PubSubState current = component.state();
 
     PubSubState target;
@@ -173,9 +183,9 @@ final class PubSubStateMachine {
     }
 
     if (target != current) {
-      apply(component, target, StatusCode.GOOD);
+      apply(component, target, StatusCode.GOOD, cause);
     } else {
-      component.children().forEach(this::recompute);
+      component.children().forEach(child -> recompute(child, Cause.PARENT));
     }
   }
 
@@ -184,14 +194,25 @@ final class PubSubStateMachine {
     return parent == null ? rootOperational : parent.state() == PubSubState.Operational;
   }
 
-  private void apply(AbstractComponentRuntime component, PubSubState newState, StatusCode status) {
+  private void apply(
+      AbstractComponentRuntime component, PubSubState newState, StatusCode status, Cause cause) {
+
     PubSubState oldState = component.state();
     if (oldState == newState) {
       return;
     }
 
     component.setState(newState);
-    notifyListener(component, oldState, newState, status);
+
+    // remember whether this component entered PreOperational by an explicit enable or a parent
+    // recompute, so the eventual PreOperational -> Operational hop (reported as STARTUP) can be
+    // attributed to StateOperationalByMethod or StateOperationalByParent (Part 14 §9.1.11 Q2)
+    if (newState == PubSubState.PreOperational
+        && (cause == Cause.METHOD || cause == Cause.PARENT)) {
+      component.setOperationalTrigger(cause);
+    }
+
+    notifyListener(component, oldState, newState, status, cause);
 
     if (isActive(oldState) && !isActive(newState)) {
       deactivateQuietly(component);
@@ -204,16 +225,20 @@ final class PubSubStateMachine {
         if (component.state() == PubSubState.PreOperational
             && component.startupCompletesImmediately()) {
 
-          apply(component, PubSubState.Operational, StatusCode.GOOD);
+          apply(component, PubSubState.Operational, StatusCode.GOOD, Cause.STARTUP);
           return;
         }
       } catch (UaException e) {
         LOGGER.debug("Activation of '{}' failed: {}", component.path(), e.getMessage(), e);
-        apply(component, PubSubState.Error, e.getStatusCode());
+        apply(component, PubSubState.Error, e.getStatusCode(), Cause.ERROR_RECOVERY);
         return;
       } catch (RuntimeException e) {
         LOGGER.warn("Activation of '{}' failed", component.path(), e);
-        apply(component, PubSubState.Error, new StatusCode(StatusCodes.Bad_InternalError));
+        apply(
+            component,
+            PubSubState.Error,
+            new StatusCode(StatusCodes.Bad_InternalError),
+            Cause.ERROR_RECOVERY);
         return;
       }
     }
@@ -226,17 +251,18 @@ final class PubSubStateMachine {
       }
     }
 
-    component.children().forEach(this::recompute);
+    component.children().forEach(child -> recompute(child, Cause.PARENT));
   }
 
   private void notifyListener(
       AbstractComponentRuntime component,
       PubSubState oldState,
       PubSubState newState,
-      StatusCode status) {
+      StatusCode status,
+      Cause cause) {
 
     try {
-      listener.onStateChange(component, oldState, newState, status);
+      listener.onStateChange(component, oldState, newState, status, cause);
     } catch (RuntimeException e) {
       LOGGER.warn("State change listener failed for '{}'", component.path(), e);
     }

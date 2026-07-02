@@ -41,6 +41,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.PubSubBindings;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubHandle;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubService;
 import org.eclipse.milo.opcua.sdk.pubsub.PubSubServiceConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.PubSubStateChangeEvent.Cause;
 import org.eclipse.milo.opcua.sdk.pubsub.PublishedDataSetReadContext;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetWriterConfig;
@@ -96,15 +97,17 @@ class PubSubStateMachineTest {
 
   // region direct state machine tests
 
-  private record Transition(String path, PubSubState from, PubSubState to, StatusCode status) {}
+  private record Transition(
+      String path, PubSubState from, PubSubState to, StatusCode status, Cause cause) {}
 
   private final List<Transition> transitions = new ArrayList<>();
 
   private final PubSubStateMachine machine =
       new PubSubStateMachine(
           new Object(),
-          (component, oldState, newState, statusCode) ->
-              transitions.add(new Transition(component.path(), oldState, newState, statusCode)));
+          (component, oldState, newState, statusCode, cause) ->
+              transitions.add(
+                  new Transition(component.path(), oldState, newState, statusCode, cause)));
 
   private static final class TestComponent extends AbstractComponentRuntime {
 
@@ -429,6 +432,58 @@ class PubSubStateMachineTest {
     List<Transition> observed = transitionsOf("conn");
     assertEquals(
         new StatusCode(StatusCodes.Bad_InternalError), observed.get(observed.size() - 1).status());
+  }
+
+  @Test
+  void stateChangeCausesAreAttributedForTheStateCounters() {
+    var connection = new TestComponent("conn", null, true);
+    var reader = new TestComponent("conn/reader", connection, true);
+    reader.immediateStartup = false;
+
+    // root operational: the connection is PARENT-driven; its Operational hop is STARTUP
+    machine.setRootOperational(true, List.of(connection));
+
+    List<Transition> connTransitions = transitionsOf("conn");
+    assertEquals(PubSubState.PreOperational, connTransitions.get(0).to());
+    assertEquals(Cause.PARENT, connTransitions.get(0).cause());
+    Transition connOperational = connTransitions.get(connTransitions.size() - 1);
+    assertEquals(PubSubState.Operational, connOperational.to());
+    assertEquals(Cause.STARTUP, connOperational.cause());
+
+    // the deferred reader entered PreOperational by the parent cascade
+    List<Transition> readerTransitions = transitionsOf("conn/reader");
+    assertEquals(PubSubState.PreOperational, readerTransitions.get(0).to());
+    assertEquals(Cause.PARENT, readerTransitions.get(0).cause());
+
+    // completing its startup reaches Operational with cause STARTUP (attribution uses the
+    // remembered PARENT trigger, exercised through the engine test below)
+    transitions.clear();
+    machine.startupCompleted(reader);
+    Transition readerOperational = transitionsOf("conn/reader").get(0);
+    assertEquals(PubSubState.Operational, readerOperational.to());
+    assertEquals(Cause.STARTUP, readerOperational.cause());
+
+    // fail into Error and recover: both carry ERROR_RECOVERY
+    transitions.clear();
+    machine.fail(reader, new StatusCode(StatusCodes.Bad_Timeout));
+    assertEquals(Cause.ERROR_RECOVERY, transitionsOf("conn/reader").get(0).cause());
+    transitions.clear();
+    machine.recover(reader);
+    assertEquals(Cause.ERROR_RECOVERY, transitionsOf("conn/reader").get(0).cause());
+
+    // an explicit disable is METHOD
+    transitions.clear();
+    machine.setEnabled(reader, false);
+    Transition readerDisabled = transitionsOf("conn/reader").get(0);
+    assertEquals(PubSubState.Disabled, readerDisabled.to());
+    assertEquals(Cause.METHOD, readerDisabled.cause());
+
+    // subtree disposal is DISPOSE (never a Disable Method call)
+    transitions.clear();
+    machine.disposeSubtree(connection);
+    Transition connDisposed = transitionsOf("conn").get(transitionsOf("conn").size() - 1);
+    assertEquals(PubSubState.Disabled, connDisposed.to());
+    assertEquals(Cause.DISPOSE, connDisposed.cause());
   }
 
   @Test

@@ -219,6 +219,47 @@ public interface PubSubService extends AutoCloseable {
   void addDiagnosticsListener(PubSubDiagnosticsListener listener);
 
   /**
+   * Remove a previously added global DataSet listener. Removal is by identity of the exact listener
+   * instance; no-op if it was not registered.
+   *
+   * @param listener the listener to remove.
+   */
+  void removeDataSetListener(DataSetListener listener);
+
+  /**
+   * Remove a previously added per-reader DataSet listener. Removal is by identity of the exact
+   * listener instance; no-op if it was not registered for {@code reader}.
+   *
+   * @param reader the reference the listener was registered for.
+   * @param listener the listener to remove.
+   */
+  void removeDataSetListener(DataSetReaderRef reader, DataSetListener listener);
+
+  /**
+   * Remove a previously added state listener. Removal is by identity of the exact listener
+   * instance; no-op if it was not registered.
+   *
+   * @param listener the listener to remove.
+   */
+  void removeStateListener(PubSubStateListener listener);
+
+  /**
+   * Remove a previously added metadata listener. Removal is by identity of the exact listener
+   * instance; no-op if it was not registered.
+   *
+   * @param listener the listener to remove.
+   */
+  void removeMetaDataListener(MetaDataListener listener);
+
+  /**
+   * Remove a previously added diagnostics listener. Removal is by identity of the exact listener
+   * instance; no-op if it was not registered.
+   *
+   * @param listener the listener to remove.
+   */
+  void removeDiagnosticsListener(PubSubDiagnosticsListener listener);
+
+  /**
    * Get the diagnostics view of this service.
    *
    * @return the {@link PubSubDiagnostics} for this service.

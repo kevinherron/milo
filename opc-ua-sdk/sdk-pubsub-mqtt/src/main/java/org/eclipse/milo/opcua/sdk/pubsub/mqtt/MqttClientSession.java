@@ -40,6 +40,7 @@ import java.util.function.BiConsumer;
 import org.eclipse.milo.opcua.sdk.pubsub.config.BrokerSecurityConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.MqttConnectionConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublisherId;
+import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportStateListener;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
@@ -125,10 +126,21 @@ final class MqttClientSession {
   private final @Nullable Mqtt5SimpleAuth simpleAuth5;
   private final @Nullable Mqtt3SimpleAuth simpleAuth3;
 
-  private MqttClientSession(MqttConnectionConfig config, Executor nettyExecutor)
+  /**
+   * The engine's connectivity callback (R16), or {@code null} when none was supplied. Invoked on
+   * every (re)connect and disconnect from the HiveMQ listener threads; the engine hops to its own
+   * executor before touching its state machine.
+   */
+  private final @Nullable TransportStateListener transportStateListener;
+
+  private MqttClientSession(
+      MqttConnectionConfig config,
+      Executor nettyExecutor,
+      @Nullable TransportStateListener transportStateListener)
       throws UaException {
 
     this.config = config;
+    this.transportStateListener = transportStateListener;
 
     brokerAddress = MqttBrokerAddress.parse(config);
     versionMode = versionMode(config);
@@ -162,12 +174,16 @@ final class MqttClientSession {
    *
    * @param config the connection config.
    * @param nettyExecutor the executor HiveMQ uses for Netty I/O (never shut down by the client).
+   * @param transportStateListener the engine's connectivity callback, or {@code null} for none.
    * @return a new {@link MqttClientSession}.
    * @throws UaException if the broker URI, connection properties, or security material are invalid.
    */
-  static MqttClientSession create(MqttConnectionConfig config, Executor nettyExecutor)
+  static MqttClientSession create(
+      MqttConnectionConfig config,
+      Executor nettyExecutor,
+      @Nullable TransportStateListener transportStateListener)
       throws UaException {
-    return new MqttClientSession(config, nettyExecutor);
+    return new MqttClientSession(config, nettyExecutor, transportStateListener);
   }
 
   MqttConnectionConfig config() {
@@ -349,6 +365,10 @@ final class MqttClientSession {
         entries.size());
 
     entries.forEach(entry -> subscribeEntry(adapter, entry));
+
+    // report the (re)connect to the engine (R16): the connection recovers to Operational, which
+    // re-activates its writers and re-publishes retained metadata; a no-op when already operational
+    notifyTransportStateListener(true);
   }
 
   private void onDisconnected(MqttClientDisconnectedContext context) {
@@ -366,6 +386,10 @@ final class MqttClientSession {
       context.getReconnector().reconnect(false);
       return;
     }
+
+    // report the disconnect to the engine (R16): the connection fails into Error, pausing its
+    // writers/readers until a reconnect; a no-op when the connection is not currently active
+    notifyTransportStateListener(false);
 
     Throwable cause = context.getCause();
 
@@ -434,6 +458,33 @@ final class MqttClientSession {
                     entry.qos());
               }
             });
+  }
+
+  /**
+   * Report a connectivity change to the engine's {@link TransportStateListener}, if one was
+   * supplied. Runs on a HiveMQ listener thread; the listener itself hops to the engine executor, so
+   * this must not block, and any listener exception is contained.
+   *
+   * @param connected {@code true} for a (re)connect, {@code false} for a disconnect.
+   */
+  private void notifyTransportStateListener(boolean connected) {
+    TransportStateListener listener = transportStateListener;
+    if (listener == null) {
+      return;
+    }
+    try {
+      if (connected) {
+        listener.onConnected();
+      } else {
+        listener.onDisconnected();
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn(
+          "connection '{}': transport-state listener failed ({})",
+          config.name(),
+          connected ? "connected" : "disconnected",
+          e);
+    }
   }
 
   private static boolean isUnsupportedProtocolVersion(Throwable cause) {

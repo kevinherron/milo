@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -61,9 +62,10 @@ import org.slf4j.LoggerFactory;
  * send leaves the baseline untouched and is retried with bounded backoff until the first success,
  * covering the common case of the activation publish racing the transport's asynchronous broker
  * connect (broker channels fail fast until connected). After the bounded retries are exhausted the
- * periodic task and the reconfigure on-change check remain as retry opportunities; an unconditional
- * republish on broker reconnect needs a transport connection-state callback, a future SPI
- * extension.
+ * periodic task and the reconfigure on-change check remain as retry opportunities; a broker
+ * reconnect additionally republishes retained metadata because the transport reports it (Part 14
+ * R16 {@code TransportStateListener}), which recovers the connection to {@code Operational} and
+ * re-activates its writers — and {@link #onWriterActivated} publishes on every activation.
  *
  * <p>Sequence numbers come from the service's per-PublisherId announcement counter (Part 14
  * §7.2.4.6.3 Table 168 scope); a stream of one writer's metadata messages is strictly increasing
@@ -293,42 +295,58 @@ final class MetaDataPublisher {
     }
 
     try {
-      channel
-          .send(encoded.data(), address)
-          .whenComplete(
-              (v, ex) -> {
-                if (ex != null) {
-                  service
-                      .getDiagnostics()
-                      .error(
-                          writerPath,
-                          new StatusCode(StatusCodes.Bad_CommunicationError),
-                          "failed to send DataSetMetaData message: " + ex.getMessage(),
-                          ex);
-                  scheduleRetry(group, writer);
-                } else {
-                  service.getDiagnostics().networkMessageSent(connection.path());
-                  synchronized (lock) {
-                    if (!disposed) {
-                      retryAttempts.remove(writerPath);
-                      lastPublished.put(writerPath, metaData);
-                    }
-                  }
+      CompletableFuture<Void> sendFuture = channel.send(encoded.data(), address);
+      // hand-off convention (R14): count the metadata NetworkMessage as sent when it is handed to
+      // the channel, matching WriterGroupRuntime, rather than only on async success
+      service.getDiagnostics().networkMessageSent(connection.path());
+      sendFuture.whenComplete(
+          (v, ex) -> {
+            if (ex != null) {
+              recordSendFailure(group, writer, channel, writerPath, ex);
+            } else {
+              synchronized (lock) {
+                if (!disposed) {
+                  retryAttempts.remove(writerPath);
+                  lastPublished.put(writerPath, metaData);
                 }
-              });
+              }
+            }
+          });
     } catch (RuntimeException e) {
       // a synchronous send failure leaves ownership of the in-flight buffer ambiguous (never
       // double-release it; conforming channels release on every path, see PublisherChannel#send);
       // diagnose and retry like an asynchronous failure — the retained publish is idempotent
-      service
-          .getDiagnostics()
-          .error(
-              writerPath,
-              new StatusCode(StatusCodes.Bad_CommunicationError),
-              "failed to send DataSetMetaData message: " + e.getMessage(),
-              e);
-      scheduleRetry(group, writer);
+      recordSendFailure(group, writer, channel, writerPath, e);
     }
+  }
+
+  /**
+   * Record a metadata send failure and schedule a retry, unless the connection's publisher channel
+   * is no longer {@code channel} — i.e. it was closed on a clean shutdown, disable, or
+   * reconfigure-removal, in which case the failure is channel-teardown noise and no diagnostics
+   * error is recorded and no retry is scheduled (Phase 5 send-failure cleanup). The recorded status
+   * is the transport's real status (un-flattened), or {@code Bad_CommunicationError} as the
+   * default.
+   */
+  private void recordSendFailure(
+      WriterGroupRuntime group,
+      DataSetWriterRuntime writer,
+      PublisherChannel channel,
+      String writerPath,
+      Throwable ex) {
+
+    if (connection.publisherChannel() != channel) {
+      return;
+    }
+    service
+        .getDiagnostics()
+        .error(
+            writerPath,
+            UaException.extractStatusCode(ex)
+                .orElse(new StatusCode(StatusCodes.Bad_CommunicationError)),
+            "failed to send DataSetMetaData message: " + ex.getMessage(),
+            ex);
+    scheduleRetry(group, writer);
   }
 
   /**

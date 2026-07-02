@@ -22,6 +22,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.transport.PublisherTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberChannel;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportProvider;
+import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportStateListener;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
@@ -56,8 +57,11 @@ import org.jspecify.annotations.Nullable;
  * {@code authenticationProfileUri} per-queue credential lookups are not consulted.
  *
  * <p>Reconnect: automatic with the HiveMQ default backoff; subscriptions are explicitly re-issued
- * on every reconnect. Broker outages surface as send failures in the engine's diagnostics (the
- * transport SPI has no connection-state callback in this version).
+ * on every reconnect. A broker disconnect is reported to the engine through the transport context's
+ * {@link org.eclipse.milo.opcua.sdk.pubsub.transport.TransportStateListener}, moving the connection
+ * to {@code PubSubState.Error} (pausing its writers/readers), and the reconnect recovers it to
+ * {@code Operational} — re-issuing subscriptions and re-publishing retained metadata; outages also
+ * surface as send-failure diagnostics until the connection pauses.
  *
  * <p>Threading: channels perform network I/O on the HiveMQ client's Netty threads, which run on the
  * service event loop group supplied by the transport context (the client never shuts a
@@ -149,7 +153,8 @@ public final class MqttTransportProvider implements TransportProvider {
   public PublisherChannel openPublisher(PublisherTransportContext context) throws UaException {
     MqttConnectionConfig connection = mqttConnection(context.connection());
 
-    MqttClientSession session = acquireSession(connection, context.eventLoopGroup());
+    MqttClientSession session =
+        acquireSession(connection, context.eventLoopGroup(), context.transportStateListener());
     try {
       return new MqttPublisherChannel(this, session);
     } catch (RuntimeException e) {
@@ -162,7 +167,8 @@ public final class MqttTransportProvider implements TransportProvider {
   public SubscriberChannel openSubscriber(SubscriberTransportContext context) throws UaException {
     MqttConnectionConfig connection = mqttConnection(context.connection());
 
-    MqttClientSession session = acquireSession(connection, context.eventLoopGroup());
+    MqttClientSession session =
+        acquireSession(connection, context.eventLoopGroup(), context.transportStateListener());
     try {
       return MqttSubscriberChannel.open(this, session, connection, context);
     } catch (RuntimeException e) {
@@ -173,16 +179,22 @@ public final class MqttTransportProvider implements TransportProvider {
 
   /**
    * Acquire the shared client session of {@code config}, creating it (and initiating its async
-   * connect) on first acquisition.
+   * connect) on first acquisition. The {@code transportStateListener} is bound to the session on
+   * creation; the engine supplies the same instance for a connection's publisher and subscriber
+   * channels, so later acquisitions simply reuse the session (and its listener).
    */
   private MqttClientSession acquireSession(
-      MqttConnectionConfig config, EventLoopGroup eventLoopGroup) throws UaException {
+      MqttConnectionConfig config,
+      EventLoopGroup eventLoopGroup,
+      @Nullable TransportStateListener transportStateListener)
+      throws UaException {
 
     synchronized (sessions) {
       SessionHolder holder = sessions.get(config);
       if (holder == null) {
         Executor executor = nettyExecutor != null ? nettyExecutor : eventLoopGroup;
-        MqttClientSession session = MqttClientSession.create(config, executor);
+        MqttClientSession session =
+            MqttClientSession.create(config, executor, transportStateListener);
         holder = new SessionHolder(session);
         sessions.put(config, holder);
         session.start();

@@ -30,10 +30,12 @@ import org.eclipse.milo.opcua.sdk.pubsub.transport.PublisherTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberChannel;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportProvider;
+import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportStateListener;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.ChunkReassembler;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.MessageMappingProvider;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.util.ExecutionQueue;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -85,6 +87,30 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
   private volatile @Nullable PublisherChannel publisherChannel;
   private volatile @Nullable SubscriberChannel subscriberChannel;
   private volatile boolean disposed = false;
+
+  /**
+   * Consumes transport connectivity transitions (R16): a broker disconnect drives this connection's
+   * {@code PubSubState} to {@code Error} (cascading its groups and their writers/readers to {@code
+   * Paused} per the §6.2.1 rules), and a reconnect recovers it to {@code Operational} —
+   * re-activating those components, which re-issues subscriptions (via the transport) and
+   * re-publishes retained metadata (via {@code onWriterActivated}). Passed to the transport in the
+   * open contexts; the built-in UDP transport ignores it, so UDP behavior is unchanged. Both
+   * callbacks hop to the transport executor before touching the state machine, honoring the
+   * never-hold-the-engine-lock- across-I/O rule; the state machine's own guards make
+   * repeated/duplicate transitions no-ops.
+   */
+  private final TransportStateListener transportStateListener =
+      new TransportStateListener() {
+        @Override
+        public void onConnected() {
+          onTransportConnected();
+        }
+
+        @Override
+        public void onDisconnected() {
+          onTransportDisconnected();
+        }
+      };
 
   ConnectionRuntime(PubSubServiceImpl service, PubSubConnectionConfig config) {
     super(ComponentType.CONNECTION, config.name(), null, config.enabled());
@@ -241,7 +267,8 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
 
     try {
       publisherChannel =
-          provider.openPublisher(PublisherTransportContext.of(config, eventLoopGroup()));
+          provider.openPublisher(
+              PublisherTransportContext.of(config, eventLoopGroup(), transportStateListener));
     } catch (UaException e) {
       service
           .getDiagnostics()
@@ -279,7 +306,11 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
       subscriberChannel =
           provider.openSubscriber(
               SubscriberTransportContext.of(
-                  config, eventLoopGroup(), this::onDatagram, this::onTopicMessage));
+                  config,
+                  eventLoopGroup(),
+                  this::onDatagram,
+                  this::onTopicMessage,
+                  transportStateListener));
     } catch (UaException e) {
       service
           .getDiagnostics()
@@ -462,6 +493,60 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
    */
   private void onTopicMessage(String topic, ByteBuf buffer) {
     onDatagram(buffer);
+  }
+
+  /**
+   * The transport (re)connected: recover this connection to {@code Operational} (a no-op if it is
+   * not currently in {@code Error}). The recovery re-activates the connection's groups and their
+   * writers/readers, which re-publishes retained metadata on broker connections; the transport
+   * itself re-issues subscriptions. Invoked from a transport I/O thread, so it hops off that thread
+   * before touching the state machine (never holding the engine lock across I/O). The hop goes
+   * through the per-connection {@link #dispatchQueue} rather than the bare transport executor so
+   * that connect/disconnect transitions are applied in submission order: {@code recover()} and
+   * {@code fail()} are order-dependent (each is a no-op outside the state it expects), and the
+   * default shared transport executor provides no ordering between two independently submitted
+   * tasks. Serializing through the FIFO queue also orders these transitions relative to in-flight
+   * datagram dispatch.
+   */
+  private void onTransportConnected() {
+    if (disposed) {
+      return;
+    }
+    try {
+      dispatchQueue.submit(
+          () -> {
+            if (!disposed) {
+              service.getStateMachine().recover(this);
+            }
+          });
+    } catch (RejectedExecutionException e) {
+      // executor shutting down; the connection is being torn down anyway
+    }
+  }
+
+  /**
+   * The transport lost its connection: fail this connection into {@code Error} (a no-op if it is
+   * not currently active), cascading its children to {@code Paused} per the §6.2.1 rules and
+   * stopping their publishing/subscribing until a reconnect. Invoked from a transport I/O thread;
+   * hops through the per-connection {@link #dispatchQueue} as {@link #onTransportConnected()} does
+   * so a disconnect/reconnect pair cannot be reordered by the shared transport executor.
+   */
+  private void onTransportDisconnected() {
+    if (disposed) {
+      return;
+    }
+    try {
+      dispatchQueue.submit(
+          () -> {
+            if (!disposed) {
+              service
+                  .getStateMachine()
+                  .fail(this, new StatusCode(StatusCodes.Bad_ConnectionClosed));
+            }
+          });
+    } catch (RejectedExecutionException e) {
+      // executor shutting down; the connection is being torn down anyway
+    }
   }
 
   /**

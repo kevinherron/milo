@@ -89,6 +89,29 @@ final class EventDispatcher {
     diagnosticsListeners.add(listener);
   }
 
+  void removeDataSetListener(DataSetListener listener) {
+    dataSetListeners.remove(listener);
+  }
+
+  void removeDataSetListener(DataSetReaderRef ref, DataSetListener listener) {
+    List<DataSetListener> perReader = readerListeners.get(ref);
+    if (perReader != null) {
+      perReader.remove(listener);
+    }
+  }
+
+  void removeStateListener(PubSubStateListener listener) {
+    stateListeners.remove(listener);
+  }
+
+  void removeMetaDataListener(MetaDataListener listener) {
+    metaDataListeners.remove(listener);
+  }
+
+  void removeDiagnosticsListener(PubSubDiagnosticsListener listener) {
+    diagnosticsListeners.remove(listener);
+  }
+
   /**
    * Dispatch a DataSet event to the per-reader and global listeners.
    *
