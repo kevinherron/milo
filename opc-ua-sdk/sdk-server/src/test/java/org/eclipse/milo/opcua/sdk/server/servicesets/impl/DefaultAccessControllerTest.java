@@ -28,7 +28,9 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UByte;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.NodeClass;
+import org.eclipse.milo.opcua.stack.core.types.structured.AccessRestrictionType;
 import org.eclipse.milo.opcua.stack.core.types.structured.AddReferencesItem;
 import org.eclipse.milo.opcua.stack.core.types.structured.CallMethodRequest;
 import org.eclipse.milo.opcua.stack.core.types.structured.DeleteNodesItem;
@@ -635,6 +637,97 @@ class DefaultAccessControllerTest {
     {
       attributesMap.put(
           methodNodeId, new AccessControlAttributes(null, null, null, null, true, null));
+
+      AccessResult result =
+          DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))
+              .get(callMethodRequest);
+
+      assertEquals(AccessResult.ALLOWED, result);
+    }
+  }
+
+  @Test
+  void checkCallAccess_AccessRestrictions_MethodNode() {
+    var objectNodeId = new NodeId(1, "object");
+    var methodNodeId = new NodeId(1, "method");
+    var callMethodRequest = new CallMethodRequest(objectNodeId, methodNodeId, null);
+
+    // AccessRestrictions like ns0 ships on PublishSubscribe.GetSecurityKeys (i=15215):
+    // SigningRequired + EncryptionRequired.
+    AccessRestrictionType accessRestrictions =
+        AccessRestrictionType.of(
+            AccessRestrictionType.Field.SigningRequired,
+            AccessRestrictionType.Field.EncryptionRequired);
+
+    attributesMap.put(
+        objectNodeId, new AccessControlAttributes(null, null, null, null, null, null));
+    attributesMap.put(
+        methodNodeId,
+        new AccessControlAttributes(null, accessRestrictions, null, null, true, null));
+
+    {
+      // unsecured channel: the real denial reason, Bad_SecurityModeInsufficient, propagates
+      Mockito.when(context.getSecurityMode()).thenReturn(MessageSecurityMode.None);
+
+      AccessResult result =
+          DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))
+              .get(callMethodRequest);
+
+      assertEquals(AccessResult.DENIED_SECURITY_MODE, result);
+    }
+
+    {
+      // signed but not encrypted: still insufficient when encryption is required
+      Mockito.when(context.getSecurityMode()).thenReturn(MessageSecurityMode.Sign);
+
+      AccessResult result =
+          DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))
+              .get(callMethodRequest);
+
+      assertEquals(AccessResult.DENIED_SECURITY_MODE, result);
+    }
+
+    {
+      // SignAndEncrypt satisfies the restrictions: the call is allowed
+      Mockito.when(context.getSecurityMode()).thenReturn(MessageSecurityMode.SignAndEncrypt);
+
+      AccessResult result =
+          DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))
+              .get(callMethodRequest);
+
+      assertEquals(AccessResult.ALLOWED, result);
+    }
+  }
+
+  @Test
+  void checkCallAccess_AccessRestrictions_ObjectNode() {
+    var objectNodeId = new NodeId(1, "object");
+    var methodNodeId = new NodeId(1, "method");
+    var callMethodRequest = new CallMethodRequest(objectNodeId, methodNodeId, null);
+
+    AccessRestrictionType accessRestrictions =
+        AccessRestrictionType.of(AccessRestrictionType.Field.SigningRequired);
+
+    attributesMap.put(
+        objectNodeId,
+        new AccessControlAttributes(null, accessRestrictions, null, null, null, null));
+    attributesMap.put(
+        methodNodeId, new AccessControlAttributes(null, null, null, null, true, null));
+
+    {
+      // a restriction on the object node alone propagates its denial reason
+      Mockito.when(context.getSecurityMode()).thenReturn(MessageSecurityMode.None);
+
+      AccessResult result =
+          DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))
+              .get(callMethodRequest);
+
+      assertEquals(AccessResult.DENIED_SECURITY_MODE, result);
+    }
+
+    {
+      // signing satisfies SigningRequired: the call is allowed
+      Mockito.when(context.getSecurityMode()).thenReturn(MessageSecurityMode.Sign);
 
       AccessResult result =
           DefaultAccessController.checkCallAccess(context, List.of(callMethodRequest))

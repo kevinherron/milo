@@ -335,9 +335,19 @@ public class DefaultAccessController implements AccessController {
       PendingResult<NodeId> p0 = pending.get(i);
       PendingResult<NodeId> p1 = pending.get(i + 1);
 
-      boolean allowed = p0.result.isAllowed() && p1.result.isAllowed();
+      // Propagate the real denial reason from the object or method result, e.g.
+      // Bad_SecurityModeInsufficient from an AccessRestrictions check, rather than
+      // collapsing every denial to Bad_UserAccessDenied.
+      AccessResult result;
+      if (p0.result.isDenied()) {
+        result = p0.result;
+      } else if (p1.result.isDenied()) {
+        result = p1.result;
+      } else {
+        result = AccessResult.ALLOWED;
+      }
 
-      results.put(request, allowed ? AccessResult.ALLOWED : AccessResult.DENIED_USER_ACCESS);
+      results.put(request, result);
     }
 
     return results;
