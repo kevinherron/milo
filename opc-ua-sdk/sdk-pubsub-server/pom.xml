@@ -50,6 +50,18 @@
       <scope>test</scope>
     </dependency>
 
+    <!-- test-only: the WP-T5 status-event client tests drive a real OpcUaClient event
+         subscription against an embedded, endpoint-bound OpcUaServer to verify Part 14
+         §9.1.13 status events are received end-to-end; acyclic (sdk-client does not depend
+         on sdk-pubsub-server). The server-side TCP transport is already on the classpath
+         transitively via milo-sdk-server -> milo-transport. -->
+    <dependency>
+      <groupId>org.eclipse.milo</groupId>
+      <artifactId>milo-sdk-client</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>

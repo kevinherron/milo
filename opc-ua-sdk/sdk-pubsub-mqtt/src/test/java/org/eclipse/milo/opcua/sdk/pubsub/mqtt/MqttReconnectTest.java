@@ -17,7 +17,10 @@ import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.mapSo
 import static org.eclipse.milo.opcua.sdk.pubsub.mqtt.PubSubMqttTestSupport.mqttServiceConfig;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.hivemq.client.mqtt.datatypes.MqttQos;
+import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -68,6 +71,8 @@ class MqttReconnectTest {
   private static final PublisherId PUBLISHER_ID = PublisherId.uint16(ushort(777));
 
   private static final String DATA_TOPIC = "opcua/uadp/data/777/grp";
+
+  private static final String META_TOPIC = "opcua/uadp/metadata/777/grp/writer-a";
 
   /** Resumption budget: broker boot + reconnect backoff that may have grown during the boot. */
   private static final Duration RESUME_TIMEOUT = Duration.ofSeconds(60);
@@ -155,6 +160,80 @@ class MqttReconnectTest {
       publisher.shutdown().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
     } finally {
       secondBroker.stop();
+    }
+  }
+
+  /**
+   * R16 retained-metadata republish: metadata is published only at writer activation (no periodic
+   * republish is configured), so after the broker is replaced by a fresh instance — whose in-memory
+   * retained store starts empty — the only way a subscriber can still discover the writer's
+   * metadata is if the publisher RE-PUBLISHED it when its connection recovered to Operational. A
+   * raw MQTT probe connecting to the fresh broker after the restart receives that republished
+   * metadata.
+   */
+  @Test
+  void retainedMetadataRepublishesToFreshBrokerAfterRestart() throws Exception {
+    EmbeddedTestBroker firstBroker = EmbeddedTestBroker.start(tempDir.resolve("broker-meta-1"));
+    int port = firstBroker.port();
+
+    PubSubService publisher;
+    try {
+      publisher = startPublisher(port);
+      // once data is flowing the publisher is demonstrably established and the retained metadata is
+      // stored, so a LATE subscriber to the metadata topic receives it with the retain flag set
+      assertRetainedMetadataIsReplayed(port, Duration.ofSeconds(30));
+    } catch (Exception e) {
+      firstBroker.stop();
+      throw e;
+    }
+
+    PubSubHandle pubConn = publisher.components().connection("pub-conn").orElseThrow();
+
+    // stop the broker: the publisher connection fails into Error (R16)
+    firstBroker.stop();
+    awaitTrue(
+        () -> publisher.state(pubConn) == PubSubState.Error,
+        "publisher connection Error after broker stop",
+        Duration.ofSeconds(30));
+
+    // a FRESH broker on the same port has NO retained messages; anything a late subscriber can
+    // still replay was necessarily republished by the reconnecting publisher
+    EmbeddedTestBroker secondBroker =
+        EmbeddedTestBroker.start(tempDir.resolve("broker-meta-2"), port);
+    try {
+      // the connection recovers to Operational, which re-activates the writer group and triggers
+      // the retained-metadata republish
+      awaitTrue(
+          () -> publisher.state(pubConn) == PubSubState.Operational,
+          "publisher connection Operational after broker restart",
+          Duration.ofSeconds(30));
+
+      // the republished retained metadata replays to a late subscriber on the fresh broker
+      assertRetainedMetadataIsReplayed(port, RESUME_TIMEOUT);
+
+      publisher.shutdown().get(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+    } finally {
+      secondBroker.stop();
+    }
+  }
+
+  /**
+   * Confirm data is flowing on {@code port} (so the publisher is established and its retained
+   * metadata is stored), then assert a late subscriber to the metadata topic replays the retained
+   * metadata announcement.
+   */
+  private static void assertRetainedMetadataIsReplayed(int port, Duration timeout)
+      throws Exception {
+    try (RawMqtt5Probe dataProbe = RawMqtt5Probe.connect(port)) {
+      dataProbe.subscribe(DATA_TOPIC, MqttQos.AT_MOST_ONCE);
+      dataProbe.awaitMessage(timeout);
+    }
+    try (RawMqtt5Probe metaProbe = RawMqtt5Probe.connect(port)) {
+      metaProbe.subscribe(META_TOPIC, MqttQos.AT_LEAST_ONCE);
+      Mqtt5Publish meta = metaProbe.awaitMessage(timeout);
+      assertTrue(meta.isRetain(), "metadata must replay to a late subscriber as retained");
+      assertEquals(META_TOPIC, meta.getTopic().toString());
+      assertTrue(meta.getPayloadAsBytes().length > 0, "republished metadata must have a payload");
     }
   }
 
