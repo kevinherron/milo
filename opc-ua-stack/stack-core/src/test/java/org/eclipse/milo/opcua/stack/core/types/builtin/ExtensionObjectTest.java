@@ -2,6 +2,8 @@ package org.eclipse.milo.opcua.stack.core.types.builtin;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.eclipse.milo.opcua.stack.core.encoding.DefaultEncodingContext;
+import org.eclipse.milo.opcua.stack.core.encoding.binary.OpcUaDefaultBinaryEncoding;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,5 +40,26 @@ class ExtensionObjectTest {
     LOGGER.debug("{}", extensionObject);
     assertEquals(jsonString, extensionObject.getBody());
     assertInstanceOf(ExtensionObject.Json.class, extensionObject);
+  }
+
+  @Test
+  void encodeNullValueYieldsNullExtensionObject() {
+    var context = new DefaultEncodingContext();
+
+    ExtensionObject encoded = ExtensionObject.encode(context, null);
+
+    assertTrue(encoded.isNull());
+    assertEquals(NodeId.NULL_VALUE, encoded.getEncodingOrTypeId());
+  }
+
+  @Test
+  void encodeNullValueWithEncodingYieldsNullExtensionObject() {
+    var context = new DefaultEncodingContext();
+
+    ExtensionObject encoded =
+        ExtensionObject.encode(context, null, OpcUaDefaultBinaryEncoding.getInstance());
+
+    assertTrue(encoded.isNull());
+    assertEquals(NodeId.NULL_VALUE, encoded.getEncodingOrTypeId());
   }
 }

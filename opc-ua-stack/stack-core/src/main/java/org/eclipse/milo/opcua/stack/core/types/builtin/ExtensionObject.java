@@ -20,6 +20,7 @@ import org.eclipse.milo.opcua.stack.core.types.DataTypeEncoding;
 import org.eclipse.milo.opcua.stack.core.types.UaStructuredType;
 import org.eclipse.milo.opcua.stack.core.util.Lazy;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 
 @NullMarked
@@ -200,13 +201,24 @@ public abstract sealed class ExtensionObject
   /**
    * Encode a {@link UaStructuredType} value in the default binary encoding.
    *
+   * <p>A {@code null} value encodes to a null ExtensionObject (one whose {@link #isNull()} is
+   * {@code true}). This is the round-trip counterpart of decoding a null ExtensionObject: generated
+   * codecs pass optional abstract-typed structure fields (e.g. a UDP DataSetWriter's absent {@code
+   * TransportSettings}, for which Part 14 defines no datagram type) straight through here, and
+   * those fields must be serializable as a null ExtensionObject rather than throwing.
+   *
    * @param context an {@link EncodingContext}.
-   * @param value the {@link UaStructuredType} value to encode.
-   * @return an {@link ExtensionObject} containing the encoded value.
+   * @param value the {@link UaStructuredType} value to encode, or {@code null}.
+   * @return an {@link ExtensionObject} containing the encoded value, or a null ExtensionObject when
+   *     {@code value} is {@code null}.
    * @throws UaSerializationException if the encoding fails.
    */
-  public static ExtensionObject encode(EncodingContext context, UaStructuredType value)
+  public static ExtensionObject encode(EncodingContext context, @Nullable UaStructuredType value)
       throws UaSerializationException {
+
+    if (value == null) {
+      return ExtensionObject.of(ByteString.NULL_VALUE, NodeId.NULL_VALUE);
+    }
 
     return encodeBinary(context, value, OpcUaDefaultBinaryEncoding.getInstance());
   }
@@ -214,15 +226,24 @@ public abstract sealed class ExtensionObject
   /**
    * Encode a {@link UaStructuredType} value in the specified datatype encoding.
    *
+   * <p>A {@code null} value encodes to a null ExtensionObject (one whose {@link #isNull()} is
+   * {@code true}), regardless of the requested encoding, matching the default-encoding {@link
+   * #encode(EncodingContext, UaStructuredType)} overload.
+   *
    * @param context an {@link EncodingContext}.
-   * @param struct the {@link UaStructuredType} value to encode.
+   * @param struct the {@link UaStructuredType} value to encode, or {@code null}.
    * @param encoding the {@link DataTypeEncoding} to use.
-   * @return an {@link ExtensionObject} containing the encoded value.
+   * @return an {@link ExtensionObject} containing the encoded value, or a null ExtensionObject when
+   *     {@code struct} is {@code null}.
    * @throws UaSerializationException if the encoding fails.
    */
   public static ExtensionObject encode(
-      EncodingContext context, UaStructuredType struct, DataTypeEncoding encoding)
+      EncodingContext context, @Nullable UaStructuredType struct, DataTypeEncoding encoding)
       throws UaSerializationException {
+
+    if (struct == null) {
+      return ExtensionObject.of(ByteString.NULL_VALUE, NodeId.NULL_VALUE);
+    }
 
     if (encoding.getEncodingName().equals(DataTypeEncoding.BINARY_ENCODING_NAME)) {
       return encodeBinary(context, struct, encoding);
