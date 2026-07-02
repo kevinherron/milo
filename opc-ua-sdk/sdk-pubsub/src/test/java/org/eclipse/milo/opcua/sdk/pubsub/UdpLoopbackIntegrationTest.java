@@ -426,8 +426,13 @@ class UdpLoopbackIntegrationTest {
     assertEquals(StatusCodes.Bad_ConfigurationError, statusCode.value());
   }
 
+  /**
+   * K3: a secured group requires a resolvable SecurityGroupRef (plus a supported policy and a bound
+   * SecurityKeyProvider); mode Sign without one is a configuration error, not an unsupported
+   * feature.
+   */
   @Test
-  void startupFailsWhenSecurityModeIsSign() throws Exception {
+  void startupFailsWhenSecuredGroupHasNoSecurityGroup() throws Exception {
     int port = freeUdpPort();
 
     PublishedDataSetConfig dataSet =
@@ -468,7 +473,7 @@ class UdpLoopbackIntegrationTest {
                 config, PubSubBindings.builder().source(dataSet.ref(), mapSource(values)).build()));
 
     StatusCode statusCode = assertStartupFails(service);
-    assertEquals(StatusCodes.Bad_NotSupported, statusCode.value());
+    assertEquals(StatusCodes.Bad_ConfigurationError, statusCode.value());
   }
 
   @Test

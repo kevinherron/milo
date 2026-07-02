@@ -275,7 +275,9 @@ class PubSubConfigMapperFromDataTypeTest {
         0.0,
         uint(0),
         null,
-        MessageSecurityMode.None,
+        // Invalid = the Part 14 §6.2.9.9 "no override" sentinel emitted for readers without a
+        // MessageSecurityConfig override.
+        MessageSecurityMode.Invalid,
         null,
         null,
         null,
@@ -472,6 +474,8 @@ class PubSubConfigMapperFromDataTypeTest {
     assertNull(r.getWriterGroupId());
     assertNull(r.getDataSetWriterId());
     assertNull(r.getDataSetMetaData());
+    // A null reader securityMode is treated like the Invalid "no override" sentinel.
+    assertNull(r.getMessageSecurity());
     assertNull(r.getSubscribedDataSet());
     assertEquals(Duration.ZERO, r.getMessageReceiveTimeout());
     assertEquals(uint(0), r.getKeyFrameCount());
@@ -493,6 +497,10 @@ class PubSubConfigMapperFromDataTypeTest {
     assertEquals("sg", sg.getName());
     assertEquals("sg", sg.getSecurityGroupId());
     assertEquals(Duration.ofHours(1), sg.getKeyLifeTime());
+    assertTrue(sg.getSecurityGroupFolder().isEmpty());
+    assertTrue(sg.getRolePermissions().isEmpty());
+
+    assertTrue(config.defaultSecurityKeyServices().isEmpty());
   }
 
   // endregion

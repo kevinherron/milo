@@ -25,6 +25,7 @@ import org.eclipse.milo.opcua.stack.core.NamespaceTable;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
+import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType;
 import org.jspecify.annotations.Nullable;
 
@@ -49,6 +50,7 @@ public final class PubSubConfig {
   private final List<PublishedDataSetConfig> publishedDataSets;
   private final List<StandaloneSubscribedDataSetConfig> standaloneSubscribedDataSets;
   private final List<SecurityGroupConfig> securityGroups;
+  private final List<EndpointDescription> defaultSecurityKeyServices;
   private final Map<QualifiedName, Variant> properties;
 
   private PubSubConfig(Builder builder) {
@@ -57,6 +59,7 @@ public final class PubSubConfig {
     this.publishedDataSets = List.copyOf(builder.publishedDataSets);
     this.standaloneSubscribedDataSets = List.copyOf(builder.standaloneSubscribedDataSets);
     this.securityGroups = List.copyOf(builder.securityGroups);
+    this.defaultSecurityKeyServices = List.copyOf(builder.defaultSecurityKeyServices);
     this.properties = Collections.unmodifiableMap(new LinkedHashMap<>(builder.properties));
   }
 
@@ -135,6 +138,16 @@ public final class PubSubConfig {
   }
 
   /**
+   * Get the default Security Key Service endpoints of this config, used when a group or dataset
+   * reader does not configure its own key services (Part 14 §6.2.12.4 / Table 232).
+   *
+   * @return the default key service endpoints; possibly empty.
+   */
+  public List<EndpointDescription> defaultSecurityKeyServices() {
+    return defaultSecurityKeyServices;
+  }
+
+  /**
    * Get the additional properties of this config, in insertion order.
    *
    * @return an unmodifiable view of the additional properties.
@@ -175,6 +188,7 @@ public final class PubSubConfig {
     builder.publishedDataSets.addAll(publishedDataSets);
     builder.standaloneSubscribedDataSets.addAll(standaloneSubscribedDataSets);
     builder.securityGroups.addAll(securityGroups);
+    builder.defaultSecurityKeyServices.addAll(defaultSecurityKeyServices);
     builder.properties.putAll(properties);
     return builder;
   }
@@ -192,6 +206,7 @@ public final class PubSubConfig {
         && publishedDataSets.equals(that.publishedDataSets)
         && standaloneSubscribedDataSets.equals(that.standaloneSubscribedDataSets)
         && securityGroups.equals(that.securityGroups)
+        && defaultSecurityKeyServices.equals(that.defaultSecurityKeyServices)
         && properties.equals(that.properties);
   }
 
@@ -203,18 +218,20 @@ public final class PubSubConfig {
         publishedDataSets,
         standaloneSubscribedDataSets,
         securityGroups,
+        defaultSecurityKeyServices,
         properties);
   }
 
   @Override
   public String toString() {
-    return "PubSubConfig{enabled=%s, connections=%s, publishedDataSets=%s, standaloneSubscribedDataSets=%s, securityGroups=%s, properties=%s}"
+    return "PubSubConfig{enabled=%s, connections=%s, publishedDataSets=%s, standaloneSubscribedDataSets=%s, securityGroups=%s, defaultSecurityKeyServices=%s, properties=%s}"
         .formatted(
             enabled,
             connections,
             publishedDataSets,
             standaloneSubscribedDataSets,
             securityGroups,
+            defaultSecurityKeyServices,
             properties);
   }
 
@@ -236,6 +253,7 @@ public final class PubSubConfig {
     private final List<StandaloneSubscribedDataSetConfig> standaloneSubscribedDataSets =
         new ArrayList<>();
     private final List<SecurityGroupConfig> securityGroups = new ArrayList<>();
+    private final List<EndpointDescription> defaultSecurityKeyServices = new ArrayList<>();
     private final Map<QualifiedName, Variant> properties = new LinkedHashMap<>();
 
     private Builder() {}
@@ -296,6 +314,19 @@ public final class PubSubConfig {
     }
 
     /**
+     * Set the default Security Key Service endpoints, used when a group or dataset reader does not
+     * configure its own key services (Part 14 §6.2.12.4 / Table 232).
+     *
+     * @param endpoints the default key service endpoints.
+     * @return this {@link Builder}.
+     */
+    public Builder defaultSecurityKeyServices(List<EndpointDescription> endpoints) {
+      defaultSecurityKeyServices.clear();
+      defaultSecurityKeyServices.addAll(endpoints);
+      return this;
+    }
+
+    /**
      * Add an additional property.
      *
      * @param name the name of the property.
@@ -317,7 +348,8 @@ public final class PubSubConfig {
      *       same publisher id
      *   <li>non-zero WriterGroupId/DataSetWriterId, unique within the same publisher id scope
      *   <li>resolvable {@link PublishedDataSetRef} / {@link SecurityGroupRef} / {@link
-     *       StandaloneSubscribedDataSetRef} links
+     *       StandaloneSubscribedDataSetRef} links, including reader-level {@link SecurityGroupRef}
+     *       overrides
      *   <li>a publisher id is configured on every connection that has writer groups
      *   <li>no JSON message settings on a UDP connection
      * </ul>
@@ -344,6 +376,7 @@ public final class PubSubConfig {
           "standaloneSubscribedDataSet");
       checkUniqueNames(
           securityGroups.stream().map(SecurityGroupConfig::getName).toList(), "securityGroup");
+      checkUniqueSecurityGroupIds(securityGroups);
 
       Set<String> publishedDataSetNames =
           publishedDataSets.stream()
@@ -378,6 +411,28 @@ public final class PubSubConfig {
         if (!seen.add(name)) {
           throw new PubSubConfigValidationException(
               "duplicate %s name '%s'".formatted(elementType, name));
+        }
+      }
+    }
+
+    /**
+     * The wire id of a SecurityGroup ({@link SecurityGroupConfig#getSecurityGroupId()}) identifies
+     * it to the Security Key Service and on the mapper's wire shape, so it must be unique across
+     * the SecurityGroups of one configuration (the Phase 0 wire-id uniqueness posture; Part 14
+     * §8.3.2: "It shall be unique within the Security Key Service."). Empty ids are exempt.
+     */
+    private static void checkUniqueSecurityGroupIds(List<SecurityGroupConfig> securityGroups) {
+      Map<String, String> idToName = new HashMap<>();
+      for (SecurityGroupConfig group : securityGroups) {
+        String id = group.getSecurityGroupId();
+        if (id.isEmpty()) {
+          continue;
+        }
+        String otherName = idToName.putIfAbsent(id, group.getName());
+        if (otherName != null) {
+          throw new PubSubConfigValidationException(
+              "securityGroup '%s': duplicate securityGroupId '%s' (also used by securityGroup '%s')"
+                  .formatted(group.getName(), id, otherName));
         }
       }
     }
@@ -461,6 +516,7 @@ public final class PubSubConfig {
             throw new PubSubConfigValidationException(
                 readerPath + ": duplicate dataSetReader name within reader group");
           }
+          checkSecurityGroupRef(reader.getMessageSecurity(), securityGroupNames, readerPath);
           if (udp && reader.getSettings() instanceof JsonDataSetReaderSettings) {
             throw new PubSubConfigValidationException(
                 readerPath + ": JSON message settings are not allowed on a UDP connection");

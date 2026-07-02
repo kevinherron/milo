@@ -22,33 +22,41 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
+import org.eclipse.milo.opcua.stack.core.types.structured.RolePermissionType;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Configuration of a PubSub SecurityGroup: the security policy and key management parameters shared
  * by the writer and reader groups that reference it via {@link SecurityGroupRef}.
  *
- * <p>Message security is configuration-only in v1; the runtime rejects enabled groups configured
- * with any {@code MessageSecurityMode} other than {@code None}.
+ * <p>Key material for a SecurityGroup is obtained at runtime from the {@code SecurityKeyProvider}
+ * bound to the group's name via {@code PubSubBindings} — a pre-shared static provider or a Security
+ * Key Service pull client (OPC UA Part 14 §8.3.2). The key manager fetches when the first consuming
+ * group activates and refreshes every KeyLifetime/2, requesting {@link #getMaxFutureKeyCount()}
+ * future keys per fetch.
  */
 public final class SecurityGroupConfig {
 
   private final String name;
   private final String securityGroupId;
+  private final List<String> securityGroupFolder;
   private final @Nullable String securityPolicyUri;
   private final Duration keyLifeTime;
   private final UInteger maxFutureKeyCount;
   private final UInteger maxPastKeyCount;
+  private final List<RolePermissionType> rolePermissions;
   private final List<EndpointDescription> keyServices;
   private final Map<QualifiedName, Variant> properties;
 
   private SecurityGroupConfig(Builder builder, String securityGroupId) {
     this.name = builder.name;
     this.securityGroupId = securityGroupId;
+    this.securityGroupFolder = List.copyOf(builder.securityGroupFolder);
     this.securityPolicyUri = builder.securityPolicyUri;
     this.keyLifeTime = builder.keyLifeTime;
     this.maxFutureKeyCount = builder.maxFutureKeyCount;
     this.maxPastKeyCount = builder.maxPastKeyCount;
+    this.rolePermissions = List.copyOf(builder.rolePermissions);
     this.keyServices = List.copyOf(builder.keyServices);
     this.properties = Map.copyOf(builder.properties);
   }
@@ -70,6 +78,16 @@ public final class SecurityGroupConfig {
    */
   public String getSecurityGroupId() {
     return securityGroupId;
+  }
+
+  /**
+   * Get the path of the SecurityGroupFolders used to group SecurityGroups, where each entry
+   * represents one level in a folder hierarchy (Part 14 §6.2.12.2 Table 89).
+   *
+   * @return the SecurityGroupFolder path; empty for no grouping.
+   */
+  public List<String> getSecurityGroupFolder() {
+    return securityGroupFolder;
   }
 
   /**
@@ -110,6 +128,16 @@ public final class SecurityGroupConfig {
   }
 
   /**
+   * Get the permissions that apply to security key access through GetSecurityKeys for this
+   * SecurityGroup (Part 14 §6.2.12.2 Table 89).
+   *
+   * @return the role permissions; empty for no explicit restrictions.
+   */
+  public List<RolePermissionType> getRolePermissions() {
+    return rolePermissions;
+  }
+
+  /**
    * Get the endpoints of the Security Key Services that distribute keys for this SecurityGroup.
    *
    * @return the key service endpoints; possibly empty.
@@ -145,10 +173,12 @@ public final class SecurityGroupConfig {
   public Builder toBuilder() {
     Builder builder = new Builder(name);
     builder.securityGroupId = securityGroupId;
+    builder.securityGroupFolder.addAll(securityGroupFolder);
     builder.securityPolicyUri = securityPolicyUri;
     builder.keyLifeTime = keyLifeTime;
     builder.maxFutureKeyCount = maxFutureKeyCount;
     builder.maxPastKeyCount = maxPastKeyCount;
+    builder.rolePermissions.addAll(rolePermissions);
     builder.keyServices.addAll(keyServices);
     builder.properties.putAll(properties);
     return builder;
@@ -164,10 +194,12 @@ public final class SecurityGroupConfig {
     }
     return name.equals(that.name)
         && securityGroupId.equals(that.securityGroupId)
+        && securityGroupFolder.equals(that.securityGroupFolder)
         && Objects.equals(securityPolicyUri, that.securityPolicyUri)
         && keyLifeTime.equals(that.keyLifeTime)
         && maxFutureKeyCount.equals(that.maxFutureKeyCount)
         && maxPastKeyCount.equals(that.maxPastKeyCount)
+        && rolePermissions.equals(that.rolePermissions)
         && keyServices.equals(that.keyServices)
         && properties.equals(that.properties);
   }
@@ -177,10 +209,12 @@ public final class SecurityGroupConfig {
     return Objects.hash(
         name,
         securityGroupId,
+        securityGroupFolder,
         securityPolicyUri,
         keyLifeTime,
         maxFutureKeyCount,
         maxPastKeyCount,
+        rolePermissions,
         keyServices,
         properties);
   }
@@ -206,10 +240,12 @@ public final class SecurityGroupConfig {
 
     private final String name;
     private @Nullable String securityGroupId;
+    private final List<String> securityGroupFolder = new ArrayList<>();
     private @Nullable String securityPolicyUri;
     private Duration keyLifeTime = Duration.ofHours(1);
     private UInteger maxFutureKeyCount = uint(0);
     private UInteger maxPastKeyCount = uint(0);
+    private final List<RolePermissionType> rolePermissions = new ArrayList<>();
     private final List<EndpointDescription> keyServices = new ArrayList<>();
     private final Map<QualifiedName, Variant> properties = new LinkedHashMap<>();
 
@@ -225,6 +261,19 @@ public final class SecurityGroupConfig {
      */
     public Builder securityGroupId(String securityGroupId) {
       this.securityGroupId = securityGroupId;
+      return this;
+    }
+
+    /**
+     * Set the path of the SecurityGroupFolders used to group SecurityGroups, where each entry
+     * represents one level in a folder hierarchy (Part 14 §6.2.12.2 Table 89).
+     *
+     * @param securityGroupFolder the SecurityGroupFolder path.
+     * @return this {@link Builder}.
+     */
+    public Builder securityGroupFolder(List<String> securityGroupFolder) {
+      this.securityGroupFolder.clear();
+      this.securityGroupFolder.addAll(securityGroupFolder);
       return this;
     }
 
@@ -270,6 +319,19 @@ public final class SecurityGroupConfig {
      */
     public Builder maxPastKeyCount(UInteger count) {
       this.maxPastKeyCount = count;
+      return this;
+    }
+
+    /**
+     * Set the permissions that apply to security key access through GetSecurityKeys for this
+     * SecurityGroup (Part 14 §6.2.12.2 Table 89).
+     *
+     * @param rolePermissions the role permissions.
+     * @return this {@link Builder}.
+     */
+    public Builder rolePermissions(List<RolePermissionType> rolePermissions) {
+      this.rolePermissions.clear();
+      this.rolePermissions.addAll(rolePermissions);
       return this;
     }
 

@@ -228,7 +228,8 @@ class UadpRoundTripTest {
             NETWORK_MESSAGE_NUMBER,
             NETWORK_MESSAGE_SEQUENCE,
             NETWORK_MESSAGE_TIMESTAMP,
-            drafts);
+            drafts,
+            null);
 
     DecodedNetworkMessage decoded = decode(encodeToBytes(context));
 
@@ -452,7 +453,8 @@ class UadpRoundTripTest {
             NETWORK_MESSAGE_NUMBER,
             NETWORK_MESSAGE_SEQUENCE,
             null, // no NetworkMessage timestamp supplied
-            List.of(keyFrame(writer, 1, List.of(goodValue(Variant.ofInt32(1))))));
+            List.of(keyFrame(writer, 1, List.of(goodValue(Variant.ofInt32(1))))),
+            null);
 
     DecodedNetworkMessage decoded = decode(encodeToBytes(context));
 
@@ -763,8 +765,13 @@ class UadpRoundTripTest {
     assertEquals(StatusCodes.Bad_NotSupported, e.getStatusCode().value());
   }
 
+  /**
+   * A group configured for Sign or SignAndEncrypt whose EncodeContext carries no {@code
+   * MessageSecurityContext} is a wiring error: the encoder must never silently emit plaintext for a
+   * secured group.
+   */
   @Test
-  void encodeRejectsNonNoneSecurity() {
+  void encodeRejectsSecuredGroupWithoutSecurityContext() {
     DataSetWriterConfig writer = variantWriter(1);
     WriterGroupConfig group =
         WriterGroupConfig.builder("group")
@@ -778,7 +785,7 @@ class UadpRoundTripTest {
         encodeContext(group, List.of(keyFrame(writer, 1, List.of(goodValue(Variant.ofInt32(1))))));
 
     UaException e = assertThrows(UaException.class, () -> new UadpMessageMapping().encode(context));
-    assertEquals(StatusCodes.Bad_NotSupported, e.getStatusCode().value());
+    assertEquals(StatusCodes.Bad_ConfigurationError, e.getStatusCode().value());
   }
 
   @Test
@@ -1037,7 +1044,8 @@ class UadpRoundTripTest {
         NETWORK_MESSAGE_NUMBER,
         NETWORK_MESSAGE_SEQUENCE,
         NETWORK_MESSAGE_TIMESTAMP,
-        drafts);
+        drafts,
+        null);
   }
 
   private byte[] encodeToBytes(EncodeContext context) throws UaException {
@@ -1053,7 +1061,8 @@ class UadpRoundTripTest {
   private DecodedNetworkMessage decode(byte[] message) {
     ByteBuf buffer = Unpooled.wrappedBuffer(message);
     try {
-      return new UadpMessageMapping().decode(new DecodeContext(encodingContext), buffer);
+      return new UadpMessageMapping()
+          .decode(new DecodeContext(encodingContext, null, null), buffer);
     } finally {
       buffer.release();
     }

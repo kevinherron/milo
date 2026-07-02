@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
@@ -422,6 +423,7 @@ class ConfigBuilderTest {
       assertNull(reader.getDataSetWriterId());
       assertNull(reader.getDataSetMetaData());
       assertEquals(MetadataPolicy.REQUIRE_CONFIGURED, reader.getMetadataPolicy());
+      assertNull(reader.getMessageSecurity());
       assertNull(reader.getSubscribedDataSet());
       assertEquals(Duration.ZERO, reader.getMessageReceiveTimeout());
       assertEquals(uint(0), reader.getKeyFrameCount());
@@ -587,7 +589,23 @@ class ConfigBuilderTest {
       assertTrue(config.publishedDataSets().isEmpty());
       assertTrue(config.standaloneSubscribedDataSets().isEmpty());
       assertTrue(config.securityGroups().isEmpty());
+      assertTrue(config.defaultSecurityKeyServices().isEmpty());
       assertTrue(config.properties().isEmpty());
+    }
+
+    @Test
+    void securityGroupDefaults() {
+      SecurityGroupConfig securityGroup = SecurityGroupConfig.builder("sg").build();
+
+      assertEquals("sg", securityGroup.getSecurityGroupId());
+      assertTrue(securityGroup.getSecurityGroupFolder().isEmpty());
+      assertNull(securityGroup.getSecurityPolicyUri());
+      assertEquals(Duration.ofHours(1), securityGroup.getKeyLifeTime());
+      assertEquals(uint(0), securityGroup.getMaxFutureKeyCount());
+      assertEquals(uint(0), securityGroup.getMaxPastKeyCount());
+      assertTrue(securityGroup.getRolePermissions().isEmpty());
+      assertTrue(securityGroup.getKeyServices().isEmpty());
+      assertTrue(securityGroup.getProperties().isEmpty());
     }
   }
 
@@ -615,6 +633,11 @@ class ConfigBuilderTest {
               .metadataPolicy(MetadataPolicy.ACCEPT_DISCOVERED)
               .subscribedDataSet(targetVariables())
               .settings(UadpDataSetReaderSettings.builder().groupVersion(uint(9)).build())
+              .messageSecurity(
+                  MessageSecurityConfig.builder()
+                      .mode(MessageSecurityMode.Sign)
+                      .securityGroup(new SecurityGroupRef("sg"))
+                      .build())
               .brokerTransport(BrokerTransportSettings.builder().queueName("q").build())
               .messageReceiveTimeout(Duration.ofSeconds(2))
               .keyFrameCount(uint(4))
@@ -678,7 +701,10 @@ class ConfigBuilderTest {
                       .metaData(metaData("md"))
                       .subscribedDataSet(targetVariables())
                       .build())
-              .securityGroup(SecurityGroupConfig.builder("sg").build())
+              .securityGroup(
+                  SecurityGroupConfig.builder("sg")
+                      .securityGroupFolder(List.of("Folder", "Sub"))
+                      .build())
               .property(new QualifiedName(1, "gp"), Variant.ofString("global"))
               .build();
 

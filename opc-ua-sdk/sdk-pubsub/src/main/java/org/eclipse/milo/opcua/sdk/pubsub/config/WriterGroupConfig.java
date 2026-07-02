@@ -129,6 +129,14 @@ public final class WriterGroupConfig {
    * behavior for mappings without chunking support). On OPC UA UDP connections values above 65535
    * are rejected at startup and reconfiguration (§7.3.2.1).
    *
+   * <p>When message security is enabled ({@code Sign} or {@code SignAndEncrypt}), the budget must
+   * accommodate 46-47 bytes of per-NetworkMessage security overhead — the size check runs against
+   * the complete secured message: the ExtendedFlags1 byte (1 byte, when no other extended flag
+   * already forces it), the SecurityHeader (14 bytes: SecurityFlags 1 + SecurityTokenId 4 +
+   * NonceLength 1 + MessageNonce 8), and the trailing 32-byte signature (Part 14
+   * §7.2.4.4.2-§7.2.4.4.3). A budget sized to the unsecured payload alone makes every secured cycle
+   * skip with {@code Bad_EncodingLimitsExceeded}.
+   *
    * @return the maximum NetworkMessage size in bytes; 0 means no enforced limit.
    */
   public UInteger getMaxNetworkMessageSize() {
@@ -358,7 +366,9 @@ public final class WriterGroupConfig {
      * Set the maximum size of NetworkMessages produced by this group. When non-zero, encoded
      * NetworkMessages exceeding this size are skipped instead of sent and recorded as group errors
      * with {@code Bad_EncodingLimitsExceeded}; see {@link
-     * WriterGroupConfig#getMaxNetworkMessageSize()}.
+     * WriterGroupConfig#getMaxNetworkMessageSize()} — including the 46-47 bytes of per-message
+     * security overhead the budget must accommodate when the group's effective security mode is
+     * {@code Sign} or {@code SignAndEncrypt}.
      *
      * @param maxNetworkMessageSize the maximum NetworkMessage size in bytes; defaults to 0 (no
      *     enforced limit).

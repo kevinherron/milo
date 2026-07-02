@@ -18,6 +18,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.ComponentType;
 import org.eclipse.milo.opcua.sdk.pubsub.DataSetReaderRef;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetMetaDataConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.EffectiveMessageSecurity;
 import org.eclipse.milo.opcua.sdk.pubsub.config.StandaloneSubscribedDataSetConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.StandaloneSubscribedDataSetRef;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
@@ -42,9 +43,11 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
 
   private final PubSubServiceImpl service;
   private final ConnectionRuntime connection;
+  private final ReaderGroupRuntime group;
   private final DataSetReaderConfig config;
   private final DataSetReaderRef readerRef;
   private final @Nullable DataSetMetaDataConfig configuredMetaData;
+  private final EffectiveMessageSecurity effectiveSecurity;
   private final String mappingName;
   private final long timeoutNanos;
 
@@ -76,6 +79,7 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
 
     this.service = service;
     this.connection = connection;
+    this.group = group;
     this.config = config;
 
     this.readerRef =
@@ -83,6 +87,8 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
             connection.config().name(), group.config().getName(), config.getName());
 
     this.configuredMetaData = resolveConfiguredMetaData(service, config);
+    this.effectiveSecurity =
+        EffectiveMessageSecurity.of(service.getConfig(), group.config(), config);
     this.mappingName = PubSubServiceImpl.mappingNameOf(config.getSettings());
     this.timeoutNanos =
         config.getMessageReceiveTimeout().isZero()
@@ -121,6 +127,16 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
   /** The name of the message mapping this reader's messages are decoded with. */
   String mappingName() {
     return mappingName;
+  }
+
+  /**
+   * The reader's effective message security after the Part 14 root → group → reader-override
+   * inheritance, resolved against the config generation this runtime was built from (reconfigure
+   * recreates the runtime). Consumed by the K7 mode gate and the connection's {@link
+   * ReaderSecurityResolver}.
+   */
+  EffectiveMessageSecurity effectiveSecurity() {
+    return effectiveSecurity;
   }
 
   /** The Part 14 §7.2.3 sequence-number tracking state of this reader. */
@@ -163,6 +179,24 @@ final class DataSetReaderRuntime extends AbstractComponentRuntime {
       service.getDiagnostics().error(path(), e.getStatusCode(), e.getMessage(), e);
       throw e;
     }
+
+    // the K3 validation at reader granularity: group-level startup/reconfigure/activation checks
+    // only see enabled readers, so a reader enabled after its group activated is first checked
+    // here (the HG4 activation-backstop precedent) — a secured JSON-mapped reader, or a secured
+    // override without a resolvable SecurityGroupRef/supported policy/bound provider, fails into
+    // Error instead of running
+    String securityError =
+        service.dataSetReaderSecurityError(service.getConfig(), group.config(), config, path());
+    if (securityError != null) {
+      var e = new UaException(StatusCodes.Bad_ConfigurationError, securityError);
+      service.getDiagnostics().error(path(), e.getStatusCode(), e.getMessage(), e);
+      throw e;
+    }
+
+    // a reader enabled (or added by reconfigure) after the group activated may select a
+    // SecurityGroup the group's activation never registered: register it now, or its keys would
+    // never be fetched and every matching secured message would silently drop as unknown-token
+    group.ensureReaderSecurityRegistration(this);
 
     // a REQUEST_IF_MISSING reader without effective metadata starts emitting discovery probes
     DiscoveryRuntime discovery = connection.discoveryRuntime();

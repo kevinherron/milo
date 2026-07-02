@@ -21,6 +21,8 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.MessageSecurityConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublisherId;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpDataSetWriterSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpWriterGroupSettings;
+import org.eclipse.milo.opcua.sdk.pubsub.security.MessageSecurityContext;
+import org.eclipse.milo.opcua.sdk.pubsub.security.UadpMessageSecurity;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.UaSerializationException;
@@ -35,19 +37,34 @@ import org.eclipse.milo.opcua.stack.core.types.structured.DataSetFieldContentMas
 import org.eclipse.milo.opcua.stack.core.types.structured.UadpDataSetMessageContentMask;
 import org.eclipse.milo.opcua.stack.core.types.structured.UadpNetworkMessageContentMask;
 import org.eclipse.milo.opcua.stack.core.util.BufferUtil;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Encodes one UADP NetworkMessage (OPC UA Part 14 §7.2.4) from an {@link EncodeContext}.
  *
  * <p>Scope: Data Key Frame, Data Delta Frame, and Keep Alive DataSetMessages with Variant or
- * DataValue field encoding, security mode None only. Event message emission, the RawData field
- * encoding, PromotedFields, chunking, and message security are not supported and are rejected with
- * {@code Bad_NotSupported}. (The blanket RawData rejection also covers §7.2.4.5.11's "RawField
- * encoding shall only be applied to Data Key Frame DataSetMessages".) The RawData, PromotedFields,
- * and message-security rejections are backstops: for the built-in mapping, service validation and
- * the group- and writer-level activation re-checks reject those configurations with the same status
- * code before a publish cycle ever runs, whatever the enablement order, so the encode-time throws
- * are reachable only via direct invocation.
+ * DataValue field encoding. Event message emission, the RawData field encoding, PromotedFields, and
+ * chunk emission are not supported and are rejected with {@code Bad_NotSupported}. (The blanket
+ * RawData rejection also covers §7.2.4.5.11's "RawField encoding shall only be applied to Data Key
+ * Frame DataSetMessages".) The RawData and PromotedFields rejections are backstops: for the
+ * built-in mapping, service validation and the group- and writer-level activation re-checks reject
+ * those configurations with the same status code before a publish cycle ever runs, whatever the
+ * enablement order, so the encode-time throws are reachable only via direct invocation.
+ *
+ * <p><b>Message security</b> (§7.2.4.4.3) is driven by {@link EncodeContext#securityContext()}: a
+ * {@code null} context means mode None and the output is exactly the unsecured layout — no
+ * SecurityHeader is written. With a context present, ExtendedFlags1 bit 4 is set and the
+ * SecurityHeader is written after the PicoSeconds slot: SecurityFlags ({@code 0x01} Sign, {@code
+ * 0x03} SignAndEncrypt; the force-key-reset bit is never emitted in this version), the
+ * SecurityTokenId, NonceLength = 8, and the 8-byte MessageNonce obtained from the context's nonce
+ * supplier — the Annex A form, emitted for Sign and SignAndEncrypt alike. For SignAndEncrypt the
+ * payload region (Sizes array + DataSetMessage bodies, Table 161) is AES-CTR-transformed in place
+ * on the encoder's own output buffer; then, for both modes, the whole NetworkMessage is signed and
+ * the signature appended ("the payload and the Padding field are encrypted and after that, the
+ * whole NetworkMessage is signed", §7.2.4.4.1). No SecurityFooter is ever emitted. A group whose
+ * configured security mode is Sign or SignAndEncrypt but whose EncodeContext carries no security
+ * context is rejected with {@code Bad_ConfigurationError} — the encoder never silently emits
+ * plaintext for a secured group.
  *
  * <p>Delta frames signal their type in the DataSetFlags2 type bits ({@code 0001}, §7.2.4.5.4 Table
  * 162) and write the Table 164 body: {@code FieldCount} followed by {@code FieldCount} pairs of
@@ -57,8 +74,9 @@ import org.eclipse.milo.opcua.stack.core.util.BufferUtil;
  * overflowing delta would otherwise be valid-bit cleared (§6.3.1.3.3) yet still sent — silently
  * losing the changed values without any transmission failure the publisher could observe.
  *
- * <p>Stateless: sequence numbers, GroupVersion, and timestamps are supplied by the caller via the
- * {@link EncodeContext}.
+ * <p>Stateless: sequence numbers, GroupVersion, timestamps, and security material (including the
+ * per-key nonce counter behind the context's {@code MessageNonceSupplier}) are supplied by the
+ * caller via the {@link EncodeContext}.
  */
 final class UadpNetworkMessageEncoder {
 
@@ -73,12 +91,14 @@ final class UadpNetworkMessageEncoder {
    * @return the encoded NetworkMessage; the caller assumes ownership of its buffer.
    * @throws UaException if the message could not be encoded; {@code Bad_NotSupported} if the
    *     configuration requires a feature that is out of scope (RawData field encoding,
-   *     PromotedFields, message security, event message emission), {@code Bad_ConfigurationError}
-   *     if the group or a writer does not carry UADP message settings or a delta frame draft
-   *     carries a non-zero ConfiguredSize (fixed-size layouts are key-frame-only, Part 14 Annex
-   *     A.2.1.7), {@code Bad_EncodingLimitsExceeded} if a draft's sequence number would be
+   *     PromotedFields, event message emission), {@code Bad_ConfigurationError} if the group or a
+   *     writer does not carry UADP message settings, the group's configured security mode is Sign
+   *     or SignAndEncrypt but the context carries no {@code MessageSecurityContext}, or a delta
+   *     frame draft carries a non-zero ConfiguredSize (fixed-size layouts are key-frame-only, Part
+   *     14 Annex A.2.1.7), {@code Bad_EncodingLimitsExceeded} if a draft's sequence number would be
    *     transmitted but exceeds the UInt16 wire range (Part 14 Table 162) or a count/size limit of
-   *     the wire format is exceeded.
+   *     the wire format is exceeded, {@code Bad_InternalError} if the context's nonce supplier
+   *     returns a nonce of the wrong length.
    */
   static EncodedNetworkMessage encode(EncodeContext context) throws UaException {
     if (context.messages().isEmpty()) {
@@ -102,10 +122,20 @@ final class UadpNetworkMessageEncoder {
           StatusCodes.Bad_NotSupported, "PromotedFields emission is not supported");
     }
 
+    MessageSecurityContext securityContext = context.securityContext();
     MessageSecurityConfig security = context.writerGroup().getMessageSecurity();
-    if (security != null && security.getMode() != MessageSecurityMode.None) {
+    if (securityContext == null
+        && security != null
+        && security.getMode() != MessageSecurityMode.None) {
+      // Never silently emit plaintext for a secured group: the runtime resolves a
+      // MessageSecurityContext per publish cycle and its absence here is a wiring error.
       throw new UaException(
-          StatusCodes.Bad_NotSupported, "message security is not supported: " + security.getMode());
+          StatusCodes.Bad_ConfigurationError,
+          "WriterGroup \""
+              + context.writerGroup().getName()
+              + "\" security mode "
+              + security.getMode()
+              + " requires a MessageSecurityContext on the EncodeContext");
     }
 
     for (DataSetMessageDraft draft : context.messages()) {
@@ -166,6 +196,21 @@ final class UadpNetworkMessageEncoder {
           StatusCodes.Bad_EncodingLimitsExceeded, "too many DataSetMessages: " + count);
     }
 
+    // The MessageNonce is obtained exactly once per secured NetworkMessage; it is written to the
+    // SecurityHeader verbatim and feeds the AES-CTR counter block (Part 14 Tables 156/157).
+    byte[] messageNonce = null;
+    if (securityContext != null) {
+      messageNonce = securityContext.nonceSupplier().nextNonce();
+
+      int expectedLength = securityContext.policy().getMessageNonceLength();
+      if (messageNonce.length != expectedLength) {
+        throw new UaException(
+            StatusCodes.Bad_InternalError,
+            "MessageNonceSupplier returned %d bytes, expected %d"
+                .formatted(messageNonce.length, expectedLength));
+      }
+    }
+
     List<ByteBuf> bodies = new ArrayList<>(count);
     ByteBuf buffer = BufferUtil.pooledBuffer();
     boolean success = false;
@@ -178,7 +223,13 @@ final class UadpNetworkMessageEncoder {
       OpcUaBinaryEncoder encoder =
           new OpcUaBinaryEncoder(context.encodingContext()).setBuffer(buffer);
 
-      encodeNetworkMessageHeader(context, networkMask, encoder, buffer);
+      int messageStart = buffer.writerIndex();
+
+      encodeNetworkMessageHeader(context, networkMask, encoder, buffer, messageNonce);
+
+      // The encrypted region starts after the SecurityHeader: the Sizes array and the
+      // DataSetMessage bodies are the payload of Table 161 ("The payload is encrypted.").
+      int payloadStart = buffer.writerIndex();
 
       // Sizes: present iff the PayloadHeader is enabled and there is more than one
       // DataSetMessage (Part 14 §7.2.4.5.3, Table 161).
@@ -198,6 +249,28 @@ final class UadpNetworkMessageEncoder {
         buffer.writeBytes(body);
       }
 
+      if (securityContext != null) {
+        // Order of operations per §7.2.4.4.1: encrypt the payload region in place first, then
+        // sign the whole NetworkMessage including the encrypted data, then append the signature.
+        if (securityContext.mode() == MessageSecurityMode.SignAndEncrypt) {
+          UadpMessageSecurity.applyCtr(
+              securityContext.keyMaterial(),
+              messageNonce,
+              buffer,
+              payloadStart,
+              buffer.writerIndex() - payloadStart);
+        }
+
+        byte[] signature =
+            UadpMessageSecurity.sign(
+                securityContext.keyMaterial(),
+                buffer,
+                messageStart,
+                buffer.writerIndex() - messageStart);
+
+        buffer.writeBytes(signature);
+      }
+
       success = true;
 
       return new EncodedNetworkMessage(buffer);
@@ -215,7 +288,10 @@ final class UadpNetworkMessageEncoder {
       EncodeContext context,
       UadpNetworkMessageContentMask mask,
       OpcUaBinaryEncoder encoder,
-      ByteBuf buffer) {
+      ByteBuf buffer,
+      byte @Nullable [] messageNonce) {
+
+    MessageSecurityContext securityContext = context.securityContext();
 
     boolean publisherIdEnabled = mask.getPublisherId();
     boolean groupHeaderEnabled = mask.getGroupHeader();
@@ -230,6 +306,11 @@ final class UadpNetworkMessageEncoder {
     }
     if (dataSetClassIdEnabled) {
       extendedFlags1 |= 0x08;
+    }
+    if (securityContext != null) {
+      // "If the SecurityMode in the configuration is SIGN or SIGNANDENCRYPT, this flag shall be
+      // set." (Table 154, ExtendedFlags1 bit 4)
+      extendedFlags1 |= 0x10;
     }
     if (timestampEnabled) {
       extendedFlags1 |= 0x20;
@@ -311,6 +392,25 @@ final class UadpNetworkMessageEncoder {
     if (picoSecondsEnabled) {
       // No sub-100ns time source is available; encode 0.
       encoder.encodeUInt16(ushort(0));
+    }
+
+    if (securityContext != null && messageNonce != null) {
+      // SecurityHeader (Table 154), after the PicoSeconds slot; PromotedFields and ActionHeader
+      // emission are unsupported, so this is the last header block before the payload.
+      // SecurityFlags: bit 0 signed, bit 1 encrypted ("bit 0 shall be true if bit 1 is true");
+      // the SecurityFooter (bit 2) is never emitted, and force-key-reset (bit 3) emission is
+      // deferred until a key-invalidation signal exists.
+      int securityFlags =
+          securityContext.mode() == MessageSecurityMode.SignAndEncrypt ? 0x03 : 0x01;
+      buffer.writeByte(securityFlags);
+
+      // A real SecurityTokenId and 8-byte MessageNonce are emitted for Sign and SignAndEncrypt
+      // alike — the Annex A.2.1.5/A.2.1.6 form.
+      encoder.encodeUInt32(securityContext.securityTokenId());
+      buffer.writeByte(messageNonce.length);
+      buffer.writeBytes(messageNonce);
+
+      // SecurityFooterSize is omitted: SecurityFlags bit 2 is never set.
     }
   }
 

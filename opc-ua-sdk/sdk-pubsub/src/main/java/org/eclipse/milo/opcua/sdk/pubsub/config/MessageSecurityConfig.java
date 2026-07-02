@@ -18,11 +18,19 @@ import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Message security configuration for a writer or reader group: the security mode, an optional
- * {@link SecurityGroupRef}, and the key service parameters used to obtain key material.
+ * Message security configuration for a writer or reader group, or a per-reader override on a {@link
+ * DataSetReaderConfig}: the security mode, an optional {@link SecurityGroupRef}, and the key
+ * service parameters used to obtain key material.
  *
- * <p>Message security is configuration-only in v1; the runtime rejects enabled groups configured
- * with any mode other than {@link MessageSecurityMode#None}.
+ * <p>As a reader-level override, {@link MessageSecurityMode#Invalid} is the Part 14 §6.2.9.9 "no
+ * override" sentinel; {@link EffectiveMessageSecurity} resolves the resulting inheritance chain.
+ *
+ * <p>A group running with a mode other than {@link MessageSecurityMode#None} requires a resolvable
+ * {@link SecurityGroupRef}, a supported PubSub security policy, and a {@code SecurityKeyProvider}
+ * bound for the SecurityGroup via {@code PubSubBindings}; violations are rejected with {@code
+ * Bad_ConfigurationError} at startup, reconfigure, and component activation. JSON-mapped components
+ * support no message security (OPC UA 1.05 Part 14 §7.3.4.1) — secure the broker transport via
+ * {@code BrokerSecurityConfig} instead.
  */
 public final class MessageSecurityConfig {
 

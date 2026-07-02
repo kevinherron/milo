@@ -1,0 +1,11 @@
+{
+  "description": "Computed golden vector: SignAndEncrypt, PubSub-Aes128-CTR. Payload region AES-128-CTR-encrypted with counter block KeyNonce || MessageNonce || 00000001 (Part 14 Table 157), then the whole NetworkMessage HMAC-SHA256-signed. Plaintext payload: one Variant-encoded key frame (Int32 42, Boolean true) from DataSetWriterId 1.",
+  "source": "computed",
+  "mode": "SignAndEncrypt",
+  "securityPolicyUri": "http://opcfoundation.org/UA/SecurityPolicy#PubSub-Aes128-CTR",
+  "signingKey": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "encryptingKey": "404142434445464748494a4b4c4d4e4f",
+  "keyNonce": "a0a1a2a3",
+  "messageNonce": "deadbeef01000000",
+  "tokenId": 3
+}

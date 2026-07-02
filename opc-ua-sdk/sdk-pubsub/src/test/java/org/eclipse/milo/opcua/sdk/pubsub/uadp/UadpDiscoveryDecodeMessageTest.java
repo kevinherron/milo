@@ -479,7 +479,8 @@ class UadpDiscoveryDecodeMessageTest {
   private UadpDecodedMessage decodeMessage(byte[] message) {
     ByteBuf buffer = Unpooled.wrappedBuffer(message);
     try {
-      return new UadpMessageMapping().decodeMessage(new DecodeContext(encodingContext), buffer);
+      return new UadpMessageMapping()
+          .decodeMessage(new DecodeContext(encodingContext, null, null), buffer);
     } finally {
       buffer.release();
     }

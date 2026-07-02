@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.function.Function;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetWriterConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.MessageSecurityConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.MqttConnectionConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConnectionConfig;
@@ -99,10 +100,11 @@ final class ConfigDiff {
                 StandaloneSubscribedDataSetConfig::getName),
             changes);
 
-    diffOther(
-        byName(oldConfig.securityGroups(), SecurityGroupConfig::getName),
-        byName(newConfig.securityGroups(), SecurityGroupConfig::getName),
-        changes);
+    Set<String> changedSecurityGroups =
+        diffOther(
+            byName(oldConfig.securityGroups(), SecurityGroupConfig::getName),
+            byName(newConfig.securityGroups(), SecurityGroupConfig::getName),
+            changes);
 
     Map<String, PubSubConnectionConfig> oldConnections =
         byName(oldConfig.connections(), PubSubConnectionConfig::name);
@@ -140,6 +142,7 @@ final class ConfigDiff {
 
     addDataSetInducedChanges(newConfig, changedDataSets, changes);
     addStandaloneInducedChanges(newConfig, changedStandalone, changes);
+    addSecurityGroupInducedChanges(newConfig, changedSecurityGroups, changes);
 
     boolean rootEnabledChanged = oldConfig.isEnabled() != newConfig.isEnabled();
 
@@ -341,6 +344,73 @@ final class ConfigDiff {
         }
       }
     }
+  }
+
+  /**
+   * Groups (and readers via their overrides) referencing a changed SecurityGroup must be restarted:
+   * their key state, effective security resolution, and Security Key Service registration derive
+   * from the SecurityGroup's parameters (policy URI, KeyLifetime, id), and a restart re-registers
+   * with the key manager and re-fetches keys — the Part 14 §6.2.12.2 "modification invalidates
+   * existing keys" behavior (consumed by the Phase 5 R7 remote-config path).
+   */
+  private static void addSecurityGroupInducedChanges(
+      PubSubConfig newConfig, Set<String> changedSecurityGroups, List<Change> changes) {
+
+    if (changedSecurityGroups.isEmpty()) {
+      return;
+    }
+
+    for (PubSubConnectionConfig connection : newConfig.connections()) {
+      for (WriterGroupConfig group : connection.writerGroups()) {
+        if (referencesSecurityGroup(group.getMessageSecurity(), changedSecurityGroups)) {
+          String path = connection.name() + "/" + group.getName();
+          addIfNotCovered(
+              changes,
+              new Change(
+                  Kind.CHANGED,
+                  Level.WRITER_GROUP,
+                  path,
+                  connection.name(),
+                  group.getName(),
+                  null));
+        }
+      }
+
+      for (ReaderGroupConfig group : connection.readerGroups()) {
+        boolean references =
+            referencesSecurityGroup(group.getMessageSecurity(), changedSecurityGroups);
+        if (!references) {
+          for (DataSetReaderConfig reader : group.getDataSetReaders()) {
+            if (referencesSecurityGroup(reader.getMessageSecurity(), changedSecurityGroups)) {
+              references = true;
+              break;
+            }
+          }
+        }
+        if (references) {
+          // the whole reader group restarts (not just an overriding reader): the group runtime
+          // owns the key-manager registrations of the group AND its readers' overrides
+          String path = connection.name() + "/" + group.getName();
+          addIfNotCovered(
+              changes,
+              new Change(
+                  Kind.CHANGED,
+                  Level.READER_GROUP,
+                  path,
+                  connection.name(),
+                  group.getName(),
+                  null));
+        }
+      }
+    }
+  }
+
+  private static boolean referencesSecurityGroup(
+      @Nullable MessageSecurityConfig security, Set<String> changedSecurityGroups) {
+
+    return security != null
+        && security.getSecurityGroup() != null
+        && changedSecurityGroups.contains(security.getSecurityGroup().name());
   }
 
   /** Add a change unless it (or an ancestor in the connection tree) is already present. */

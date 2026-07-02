@@ -95,13 +95,22 @@ final class PubSubStateMachine {
     }
   }
 
-  /** Move an active component to {@code Error} because of a pending error situation. */
-  void fail(AbstractComponentRuntime component, StatusCode statusCode) {
+  /**
+   * Move an active component to {@code Error} because of a pending error situation.
+   *
+   * @return {@code true} if this call transitioned the component to {@code Error}; {@code false} if
+   *     the component was not {@code PreOperational}/{@code Operational} — in particular when it is
+   *     already in {@code Error} for a different reason, so a caller planning to later {@link
+   *     #recover} "its own" failure can tell whether the failure is in fact its own.
+   */
+  boolean fail(AbstractComponentRuntime component, StatusCode statusCode) {
     synchronized (lock) {
       PubSubState state = component.state();
       if (state == PubSubState.PreOperational || state == PubSubState.Operational) {
         apply(component, PubSubState.Error, statusCode);
+        return true;
       }
+      return false;
     }
   }
 

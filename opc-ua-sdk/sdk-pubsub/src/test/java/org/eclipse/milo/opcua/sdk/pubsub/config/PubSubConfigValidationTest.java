@@ -185,6 +185,47 @@ class PubSubConfigValidationTest {
   }
 
   @Test
+  void duplicateSecurityGroupIdsRejected() {
+    // the wire id identifies the SecurityGroup to the Security Key Service (Part 14 §8.3.2
+    // "It shall be unique within the Security Key Service") and on the mapper's wire shape
+    PubSubConfig.Builder builder =
+        PubSubConfig.builder()
+            .securityGroup(SecurityGroupConfig.builder("sg-1").securityGroupId("id").build())
+            .securityGroup(SecurityGroupConfig.builder("sg-2").securityGroupId("id").build());
+
+    PubSubConfigValidationException e =
+        assertThrows(PubSubConfigValidationException.class, builder::build);
+
+    assertTrue(e.getMessage().contains("duplicate securityGroupId"), e.getMessage());
+  }
+
+  @Test
+  void nameDefaultedSecurityGroupIdCollidingWithExplicitIdRejected() {
+    // an unset (or empty) id defaults to the name at build, so a name-defaulted id and an
+    // explicit id can collide too
+    PubSubConfig.Builder builder =
+        PubSubConfig.builder()
+            .securityGroup(SecurityGroupConfig.builder("sg-1").build())
+            .securityGroup(SecurityGroupConfig.builder("sg-2").securityGroupId("sg-1").build());
+
+    PubSubConfigValidationException e =
+        assertThrows(PubSubConfigValidationException.class, builder::build);
+
+    assertTrue(e.getMessage().contains("duplicate securityGroupId"), e.getMessage());
+  }
+
+  @Test
+  void distinctSecurityGroupIdsAccepted() {
+    PubSubConfig config =
+        PubSubConfig.builder()
+            .securityGroup(SecurityGroupConfig.builder("sg-1").securityGroupId("id-1").build())
+            .securityGroup(SecurityGroupConfig.builder("sg-2").securityGroupId("id-2").build())
+            .build();
+
+    assertEquals(2, config.securityGroups().size());
+  }
+
+  @Test
   void writerAndReaderGroupNamesShareOneScopePerConnection() {
     PubSubConfig.Builder builder =
         PubSubConfig.builder()
@@ -484,6 +525,23 @@ class PubSubConfigValidationTest {
         assertThrows(PubSubConfigValidationException.class, builder::build);
 
     assertTrue(e.getMessage().contains("SecurityGroupRef"), e.getMessage());
+  }
+
+  @Test
+  void unresolvedSecurityGroupRefOnDataSetReaderRejected() {
+    ReaderGroupConfig readerGroup =
+        readerGroup(
+            "RG",
+            DataSetReaderConfig.builder("r").messageSecurity(securityRef("missing-sg")).build());
+
+    PubSubConfig.Builder builder =
+        PubSubConfig.builder().connection(udp("conn").readerGroup(readerGroup).build());
+
+    PubSubConfigValidationException e =
+        assertThrows(PubSubConfigValidationException.class, builder::build);
+
+    assertTrue(e.getMessage().contains("SecurityGroupRef"), e.getMessage());
+    assertTrue(e.getMessage().contains("missing-sg"), e.getMessage());
   }
 
   @Test

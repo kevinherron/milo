@@ -106,6 +106,84 @@ final class DiagnosticsCollector implements PubSubDiagnostics {
     }
   }
 
+  /**
+   * Record a NetworkMessage a secured WriterGroup failed to encode: encryption, signing, and nonce
+   * composition are inline with the encode of a secured NetworkMessage, so any encode failure of a
+   * secured publish cycle counts here. Also records the error and emits a diagnostics event.
+   */
+  void encryptionError(
+      String path, StatusCode statusCode, String message, @Nullable Throwable error) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.encryptionErrors.increment();
+    }
+    error(path, statusCode, message, error);
+  }
+
+  /**
+   * Record a received secured NetworkMessage whose signature verified but whose decrypted payload
+   * could not be parsed. Also records the error and emits a diagnostics event.
+   */
+  void decryptionError(
+      String path, StatusCode statusCode, String message, @Nullable Throwable error) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.decryptionErrors.increment();
+    }
+    error(path, statusCode, message, error);
+  }
+
+  /**
+   * Record a received secured NetworkMessage dropped whole because its signature did not verify
+   * (Part 14 §7.2.4.4.3.2). Also records the error and emits a diagnostics event.
+   */
+  void invalidSignatureMessage(
+      String path, StatusCode statusCode, String message, @Nullable Throwable error) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.invalidSignatureMessages.increment();
+    }
+    error(path, statusCode, message, error);
+  }
+
+  /**
+   * Record a received secured NetworkMessage dropped because its SecurityTokenId is not in the key
+   * window (Part 14 §8.3.2 unknown token; a single key refresh is triggered by the key manager). A
+   * normal-operation counter: no {@code lastError} and no diagnostics event (expected transiently
+   * around key rollover).
+   */
+  void unknownTokenMessage(String path) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.unknownTokenMessages.increment();
+    }
+  }
+
+  /**
+   * Record a received secured NetworkMessage dropped because its key is expired beyond twice the
+   * KeyLifetime or names a past key no longer held (Part 14 §6.2.12.2). A normal-operation counter:
+   * no {@code lastError} and no diagnostics event.
+   */
+  void staleKeyMessage(String path) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.staleKeyMessages.increment();
+    }
+  }
+
+  /**
+   * Record a NetworkMessage dropped for a reader whose configured security mode the received mode
+   * does not satisfy (Part 14 §7.2.4.3), or that has no SecurityGroup to supply keys for a secured
+   * message. A normal-operation counter: no {@code lastError} and no diagnostics event ("counted,
+   * not log-stormed").
+   */
+  void securityModeRejectedMessage(String path) {
+    Counters counters = countersByPath.get(path);
+    if (counters != null) {
+      counters.securityModeRejectedMessages.increment();
+    }
+  }
+
   /** Record a dropped message (decode failure, version mismatch, invalid message). */
   void decodeError(String path, StatusCode statusCode, String message, @Nullable Throwable error) {
     Counters counters = countersByPath.get(path);
@@ -161,6 +239,12 @@ final class DiagnosticsCollector implements PubSubDiagnostics {
     final LongAdder sourceErrors = new LongAdder();
     final LongAdder staleSequenceMessages = new LongAdder();
     final LongAdder invalidSequenceMessages = new LongAdder();
+    final LongAdder encryptionErrors = new LongAdder();
+    final LongAdder decryptionErrors = new LongAdder();
+    final LongAdder invalidSignatureMessages = new LongAdder();
+    final LongAdder unknownTokenMessages = new LongAdder();
+    final LongAdder staleKeyMessages = new LongAdder();
+    final LongAdder securityModeRejectedMessages = new LongAdder();
 
     volatile @Nullable StatusCode lastError;
 
@@ -181,6 +265,12 @@ final class DiagnosticsCollector implements PubSubDiagnostics {
           sourceErrors.sum(),
           staleSequenceMessages.sum(),
           invalidSequenceMessages.sum(),
+          encryptionErrors.sum(),
+          decryptionErrors.sum(),
+          invalidSignatureMessages.sum(),
+          unknownTokenMessages.sum(),
+          staleKeyMessages.sum(),
+          securityModeRejectedMessages.sum(),
           lastError);
     }
   }

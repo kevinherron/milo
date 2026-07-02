@@ -14,6 +14,7 @@ import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.uint;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ulong;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -60,11 +61,13 @@ import org.eclipse.milo.opcua.stack.core.types.structured.JsonDataSetMessageCont
 import org.eclipse.milo.opcua.stack.core.types.structured.JsonNetworkMessageContentMask;
 import org.eclipse.milo.opcua.stack.core.types.structured.KeyValuePair;
 import org.eclipse.milo.opcua.stack.core.types.structured.NetworkAddressUrlDataType;
+import org.eclipse.milo.opcua.stack.core.types.structured.PermissionType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConfiguration2DataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PubSubConnectionDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PublishedDataItemsDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PublishedDataSetDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PublishedVariableDataType;
+import org.eclipse.milo.opcua.stack.core.types.structured.RolePermissionType;
 import org.eclipse.milo.opcua.stack.core.types.structured.SecurityGroupDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.StandaloneSubscribedDataSetRefDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.TargetVariablesDataType;
@@ -159,10 +162,15 @@ class PubSubConfigMapperRoundTripTest {
   private static SecurityGroupConfig securityGroup() {
     return SecurityGroupConfig.builder("sg-1")
         .securityGroupId("SG-001")
+        .securityGroupFolder(List.of("SKS", "Line1"))
         .securityPolicyUri("http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep")
         .keyLifeTime(Duration.ofMinutes(30))
         .maxFutureKeyCount(uint(2))
         .maxPastKeyCount(uint(3))
+        .rolePermissions(
+            List.of(
+                new RolePermissionType(
+                    new NodeId(1, "role-x"), PermissionType.of(PermissionType.Field.Call))))
         .property(new QualifiedName(1, "sgProp"), Variant.ofString("sgVal"))
         .build();
   }
@@ -304,6 +312,12 @@ class PubSubConfigMapperRoundTripTest {
                     .dataSetMetaData(readerMetaData())
                     .messageReceiveTimeout(Duration.ofSeconds(5))
                     .keyFrameCount(uint(10))
+                    .messageSecurity(
+                        MessageSecurityConfig.builder()
+                            .mode(MessageSecurityMode.SignAndEncrypt)
+                            .securityGroup(sg.ref())
+                            .keyServices(List.of(keyServiceEndpoint()))
+                            .build())
                     .settings(
                         UadpDataSetReaderSettings.builder()
                             .groupVersion(uint(7))
@@ -472,9 +486,10 @@ class PubSubConfigMapperRoundTripTest {
   /**
    * A maximal authored config that is a fixed point of the round trip: UDP and MQTT connections,
    * UADP and JSON settings, all five PublisherId types, message security with a security group
-   * reference, broker transports at all three levels, node and key field addresses, promoted
-   * fields, standalone subscribed datasets, target variables, properties at every level, and raw
-   * escape hatches built from namespace 0 types.
+   * reference (including a reader-level override and default key services), broker transports at
+   * all three levels, node and key field addresses, promoted fields, standalone subscribed
+   * datasets, target variables, properties at every level, and raw escape hatches built from
+   * namespace 0 types.
    */
   private static PubSubConfig maximalConfig() {
     SecurityGroupConfig sg = securityGroup();
@@ -487,6 +502,7 @@ class PubSubConfigMapperRoundTripTest {
         .standaloneSubscribedDataSet(standalone1())
         .standaloneSubscribedDataSet(standalone2())
         .securityGroup(sg)
+        .defaultSecurityKeyServices(List.of(keyServiceEndpoint()))
         .property(new QualifiedName(1, "cfgProp"), Variant.ofString("cfgVal"))
         .build();
   }
@@ -882,12 +898,43 @@ class PubSubConfigMapperRoundTripTest {
     SecurityGroupDataType sg = dataType.getSecurityGroups()[0];
     assertEquals("sg-1", sg.getName());
     assertEquals("SG-001", sg.getSecurityGroupId());
+    assertArrayEquals(new String[] {"SKS", "Line1"}, sg.getSecurityGroupFolder());
     assertEquals(30 * 60 * 1000.0, sg.getKeyLifetime());
     assertEquals(uint(2), sg.getMaxFutureKeyCount());
     assertEquals(uint(3), sg.getMaxPastKeyCount());
+    assertArrayEquals(
+        new RolePermissionType[] {
+          new RolePermissionType(
+              new NodeId(1, "role-x"), PermissionType.of(PermissionType.Field.Call))
+        },
+        sg.getRolePermissions());
     assertEquals(
         "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
         sg.getSecurityPolicyUri());
+  }
+
+  @Test
+  void readerSecurityOverrideWireFields() {
+    PubSubConfiguration2DataType dataType = maximalConfig().toDataType(namespaceTable());
+
+    // Top-level default key services are emitted.
+    assertNotNull(dataType.getDefaultSecurityKeyServices());
+    assertEquals(1, dataType.getDefaultSecurityKeyServices().length);
+    assertEquals(keyServiceEndpoint(), dataType.getDefaultSecurityKeyServices()[0]);
+
+    DataSetReaderDataType[] readers =
+        dataType.getConnections()[0].getReaderGroups()[0].getDataSetReaders();
+
+    // dsr-1 carries an explicit override.
+    assertEquals(MessageSecurityMode.SignAndEncrypt, readers[0].getSecurityMode());
+    assertEquals("SG-001", readers[0].getSecurityGroupId());
+    assertNotNull(readers[0].getSecurityKeyServices());
+    assertEquals(1, readers[0].getSecurityKeyServices().length);
+
+    // dsr-sds has no override: SecurityMode Invalid is the §6.2.9.9 "inherit the group" sentinel.
+    assertEquals(MessageSecurityMode.Invalid, readers[1].getSecurityMode());
+    assertNull(readers[1].getSecurityGroupId());
+    assertNull(readers[1].getSecurityKeyServices());
   }
 
   // endregion

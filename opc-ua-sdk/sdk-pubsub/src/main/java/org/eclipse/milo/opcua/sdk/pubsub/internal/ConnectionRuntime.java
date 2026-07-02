@@ -30,6 +30,7 @@ import org.eclipse.milo.opcua.sdk.pubsub.transport.PublisherTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberChannel;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.SubscriberTransportContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportProvider;
+import org.eclipse.milo.opcua.sdk.pubsub.uadp.ChunkReassembler;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.MessageMappingProvider;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
@@ -64,6 +65,19 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
    */
   private final ExecutionQueue dispatchQueue;
 
+  /**
+   * Reassembles this connection's inbound chunked NetworkMessages (Part 14 §7.2.4.4.4): one
+   * stateful instance retained across dispatches, confined to the serialized dispatch thread.
+   * Cleared when the channels close: reassembly state must not survive a connection restart.
+   */
+  private final ChunkReassembler chunkReassembler = ChunkReassembler.create();
+
+  /**
+   * The subscriber-side security resolver of this connection, consulted by the UADP decoder for
+   * every received secured NetworkMessage.
+   */
+  private final ReaderSecurityResolver securityResolver;
+
   private volatile List<WriterGroupRuntime> writerGroups;
   private volatile List<ReaderGroupRuntime> readerGroups;
   private volatile Map<String, MessageMappingProvider> subscriberMappings = Map.of();
@@ -79,6 +93,7 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
     this.config = config;
 
     this.dispatchQueue = new ExecutionQueue(service.getTransportExecutor());
+    this.securityResolver = new ReaderSecurityResolver(service, this);
 
     this.dedicatedEventLoop =
         service.getServiceConfig().isEventLoopPerConnection() ? new NioEventLoopGroup(1) : null;
@@ -135,6 +150,20 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
   /** The mapping providers used to decode datagrams received on this connection, by name. */
   Map<String, MessageMappingProvider> subscriberMappings() {
     return subscriberMappings;
+  }
+
+  /**
+   * This connection's chunk reassembler: the same instance for every decode of this connection
+   * (chunks of one payload arrive in separate NetworkMessages), touched only on the serialized
+   * dispatch thread.
+   */
+  ChunkReassembler chunkReassembler() {
+    return chunkReassembler;
+  }
+
+  /** This connection's subscriber-side security resolver. */
+  ReaderSecurityResolver securityResolver() {
+    return securityResolver;
   }
 
   @Nullable PublisherChannel publisherChannel() {
@@ -294,6 +323,15 @@ final class ConnectionRuntime extends AbstractComponentRuntime {
 
     if (discoveryRuntime != null) {
       discoveryRuntime.closeChannels();
+    }
+
+    // reassembly state must not survive a channel restart; the reassembler is dispatch-thread
+    // confined, so clear on the dispatch queue (a rejected submit means the executor is shutting
+    // down and nothing will touch the reassembler again)
+    try {
+      dispatchQueue.submit(chunkReassembler::clear);
+    } catch (RejectedExecutionException e) {
+      // ignore: no further dispatch can run
     }
   }
 

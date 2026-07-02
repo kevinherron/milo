@@ -14,6 +14,7 @@ import static java.util.Objects.requireNonNull;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.ushort;
 
 import io.netty.util.concurrent.Future;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -29,6 +30,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import org.eclipse.milo.opcua.sdk.pubsub.DataSetListener;
 import org.eclipse.milo.opcua.sdk.pubsub.DataSetReaderRef;
@@ -49,17 +51,19 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderMessageSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetWriterConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetWriterMessageSettings;
+import org.eclipse.milo.opcua.sdk.pubsub.config.EffectiveMessageSecurity;
 import org.eclipse.milo.opcua.sdk.pubsub.config.JsonDataSetReaderSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.JsonDataSetWriterSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.JsonWriterGroupSettings;
-import org.eclipse.milo.opcua.sdk.pubsub.config.MessageSecurityConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PubSubConnectionConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublishedDataSetConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublishedDataSetRef;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublisherId;
 import org.eclipse.milo.opcua.sdk.pubsub.config.ReaderGroupConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupRef;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityKeyServiceValidator;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpDataSetReaderSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpDataSetWriterSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpWriterGroupSettings;
@@ -68,6 +72,8 @@ import org.eclipse.milo.opcua.sdk.pubsub.config.WriterGroupConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.WriterGroupMessageSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.json.JsonContentMasks;
 import org.eclipse.milo.opcua.sdk.pubsub.json.JsonMessageMappingProvider;
+import org.eclipse.milo.opcua.sdk.pubsub.security.PubSubSecurityPolicy;
+import org.eclipse.milo.opcua.sdk.pubsub.security.SecurityKeyProvider;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.TransportProvider;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.udp.UdpTransportProvider;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.MessageMappingProvider;
@@ -108,6 +114,17 @@ public final class PubSubServiceImpl implements PubSubService {
    */
   private static final long MAX_UDP_NETWORK_MESSAGE_SIZE = 65535L;
 
+  /**
+   * Source of the 4-byte random MessageNonce part (Table 156), shared across services: a directly
+   * constructed, properly self-seeded {@link SecureRandom}. Deliberately NOT {@code
+   * NonceUtil.generateNonce}: that helper silently falls back to a time-seeded {@code
+   * ThreadLocalRandom} until its background seeding completes — and a standalone static-key
+   * publisher draws its first token's random part immediately at startup, exactly where the random
+   * part is the only cross-restart defense against AES-CTR (key, nonce) reuse (the nonce counter
+   * restarts at 1 on every restart under a never-rotating static key).
+   */
+  private static final SecureRandom NONCE_RANDOM = new SecureRandom();
+
   private final Object lock = new Object();
 
   private final PubSubServiceConfig serviceConfig;
@@ -116,6 +133,9 @@ public final class PubSubServiceImpl implements PubSubService {
   private final UdpTransportProvider builtinUdpTransport = new UdpTransportProvider();
 
   private final ConcurrentMap<PublishedDataSetRef, PublishedDataSetSource> sources =
+      new ConcurrentHashMap<>();
+
+  private final ConcurrentMap<SecurityGroupRef, SecurityKeyProvider> securityKeyProviders =
       new ConcurrentHashMap<>();
 
   /**
@@ -132,6 +152,7 @@ public final class PubSubServiceImpl implements PubSubService {
   private final HandleRegistry registry = new HandleRegistry();
   private final PubSubStateMachine stateMachine;
   private final ReaderDispatcher readerDispatcher;
+  private final SecurityKeyManager securityKeyManager;
 
   /** Guarded by the engine lock. */
   private final Map<String, ConnectionRuntime> connections = new LinkedHashMap<>();
@@ -159,6 +180,14 @@ public final class PubSubServiceImpl implements PubSubService {
 
     stateMachine = new PubSubStateMachine(lock, this::onStateChange);
     readerDispatcher = new ReaderDispatcher(this);
+    securityKeyManager =
+        new SecurityKeyManager(
+            stateMachine,
+            diagnostics,
+            serviceConfig.getScheduledExecutor(),
+            securityKeyProviders::get,
+            defaultNonceRandomSupplier(),
+            System::nanoTime);
 
     if (bindings != null) {
       sources.putAll(bindings.getSources());
@@ -167,8 +196,7 @@ public final class PubSubServiceImpl implements PubSubService {
           .forEach(
               (ref, listeners) ->
                   listeners.forEach(listener -> eventDispatcher.addDataSetListener(ref, listener)));
-      // SecurityKeyProviders are accepted but unused: only MessageSecurityMode.None is
-      // supported in this version.
+      securityKeyProviders.putAll(bindings.getSecurityKeyProviders());
     }
 
     synchronized (lock) {
@@ -186,6 +214,19 @@ public final class PubSubServiceImpl implements PubSubService {
       }
       stateMachine.setRootOperational(false, connections.values());
     }
+  }
+
+  /**
+   * The default {@link SecurityKeyManager} 4-byte MessageNonce random-part supplier, backed by
+   * {@link #NONCE_RANDOM} (see the field Javadoc for why it must never degrade to a time-seeded
+   * PRNG). Package-private as a test seam.
+   */
+  static Supplier<byte[]> defaultNonceRandomSupplier() {
+    return () -> {
+      byte[] random = new byte[4];
+      NONCE_RANDOM.nextBytes(random);
+      return random;
+    };
   }
 
   /**
@@ -314,6 +355,10 @@ public final class PubSubServiceImpl implements PubSubService {
           disposeFutures.add(disposeFuture);
         }
       }
+
+      // components unregistered themselves via their deactivate hooks; this cancels any
+      // remaining refresh tasks and retires all key material
+      securityKeyManager.shutdown();
 
       // clear the root operational flag so a post-shutdown enable() can never transition a
       // component past Paused and reactivate disposed transport resources; handles themselves
@@ -917,6 +962,14 @@ public final class PubSubServiceImpl implements PubSubService {
     return readerDispatcher;
   }
 
+  SecurityKeyManager getSecurityKeyManager() {
+    return securityKeyManager;
+  }
+
+  @Nullable SecurityKeyProvider getSecurityKeyProvider(SecurityGroupRef ref) {
+    return securityKeyProviders.get(ref);
+  }
+
   /**
    * The built-in UADP mapping, used for the UADP-internal discovery codec regardless of any
    * user-configured "uadp" mapping override (discovery is not part of the mapping SPI).
@@ -1074,18 +1127,20 @@ public final class PubSubServiceImpl implements PubSubService {
   }
 
   /**
-   * Validate the conditions pinned to fail {@code startup()}: unsupported security modes on enabled
-   * groups, missing transport or mapping providers for enabled components, missing sources for
-   * enabled writers, publisher-less connections with enabled writer groups, enabled readers on
-   * broker connections without a configured data queueName, enabled writer groups on UDP
-   * connections with a maxNetworkMessageSize above the Part 14 §7.3.2.1 limit of 65535, enabled
-   * writers whose keyFrameCount > 1 cannot be honored — JSON writers whose effective content masks
-   * cannot express delta frames, and UADP writers with a non-zero ConfiguredSize; both only when
-   * the group's mapping resolves to the built-in provider (see {@link #deltaFrameConfigError}) —
-   * and enabled UADP writer groups asking for emission features the built-in mapping does not
-   * implement: the group-level PromotedFields content-mask bit and the RawData field-content-mask
-   * bit of enabled writers, rejected with {@code Bad_NotSupported} (see {@link
-   * #unsupportedUadpFeatureError}).
+   * Validate the conditions pinned to fail {@code startup()}: invalid message security
+   * configuration on enabled groups (K3, see {@link #messageSecurityConfigError}: secured
+   * JSON-mapped components, and secured components lacking a resolvable SecurityGroupRef, a
+   * supported policy, or a bound SecurityKeyProvider), missing transport or mapping providers for
+   * enabled components, missing sources for enabled writers, publisher-less connections with
+   * enabled writer groups, enabled readers on broker connections without a configured data
+   * queueName, enabled writer groups on UDP connections with a maxNetworkMessageSize above the Part
+   * 14 §7.3.2.1 limit of 65535, enabled writers whose keyFrameCount > 1 cannot be honored — JSON
+   * writers whose effective content masks cannot express delta frames, and UADP writers with a
+   * non-zero ConfiguredSize; both only when the group's mapping resolves to the built-in provider
+   * (see {@link #deltaFrameConfigError}) — and enabled UADP writer groups asking for emission
+   * features the built-in mapping does not implement: the group-level PromotedFields content-mask
+   * bit and the RawData field-content-mask bit of enabled writers, rejected with {@code
+   * Bad_NotSupported} (see {@link #unsupportedUadpFeatureError}).
    */
   private void validateStartup(PubSubConfig config) throws UaException {
     if (!config.isEnabled()) {
@@ -1115,7 +1170,10 @@ public final class PubSubServiceImpl implements PubSubService {
 
         String groupPath = connection.name() + "/" + group.getName();
 
-        checkMessageSecurity(group.getMessageSecurity(), groupPath);
+        String securityError = messageSecurityConfigError(config, group, groupPath);
+        if (securityError != null) {
+          throw new UaException(StatusCodes.Bad_ConfigurationError, securityError);
+        }
 
         if (!broker
             && group.getMaxNetworkMessageSize().longValue() > MAX_UDP_NETWORK_MESSAGE_SIZE) {
@@ -1172,7 +1230,10 @@ public final class PubSubServiceImpl implements PubSubService {
 
         String groupPath = connection.name() + "/" + group.getName();
 
-        checkMessageSecurity(group.getMessageSecurity(), groupPath);
+        String securityError = messageSecurityConfigError(config, group, groupPath);
+        if (securityError != null) {
+          throw new UaException(StatusCodes.Bad_ConfigurationError, securityError);
+        }
 
         for (DataSetReaderConfig reader : group.getDataSetReaders()) {
           if (!reader.isEnabled()) {
@@ -1201,13 +1262,14 @@ public final class PubSubServiceImpl implements PubSubService {
 
   /**
    * Validate the subset of the {@link #validateStartup} conditions that reconfiguration must also
-   * enforce, because the runtime cannot degrade gracefully on them: missing mapping providers for
-   * enabled components, enabled readers on broker connections without a configured data queueName,
-   * and enabled writer groups on UDP connections with a maxNetworkMessageSize above the Part 14
-   * §7.3.2.1 limit of 65535. Throws {@link UaRuntimeException} with {@code Bad_ConfigurationError}
-   * (the reconfigure API has no checked-exception surface). Startup-only conditions with a graceful
-   * runtime degradation path (e.g. unbound sources, which surface as source errors) are not
-   * re-checked here.
+   * enforce, because the runtime cannot degrade gracefully on them: invalid message security
+   * configuration on enabled groups (K3 enforces at startup <em>and</em> reconfigure), missing
+   * mapping providers for enabled components, enabled readers on broker connections without a
+   * configured data queueName, and enabled writer groups on UDP connections with a
+   * maxNetworkMessageSize above the Part 14 §7.3.2.1 limit of 65535. Throws {@link
+   * UaRuntimeException} with {@code Bad_ConfigurationError} (the reconfigure API has no
+   * checked-exception surface). Startup-only conditions with a graceful runtime degradation path
+   * (e.g. unbound sources, which surface as source errors) are not re-checked here.
    *
    * <p>The delta-frame consistency check ({@link #deltaFrameConfigError}) is also enforced here,
    * even though the runtime degrades such writers safely to every-cycle key frames: a configuration
@@ -1240,6 +1302,11 @@ public final class PubSubServiceImpl implements PubSubService {
         }
 
         String groupPath = connection.name() + "/" + group.getName();
+
+        String securityError = messageSecurityConfigError(config, group, groupPath);
+        if (securityError != null) {
+          throw new UaRuntimeException(StatusCodes.Bad_ConfigurationError, securityError);
+        }
 
         if (!broker
             && group.getMaxNetworkMessageSize().longValue() > MAX_UDP_NETWORK_MESSAGE_SIZE) {
@@ -1278,6 +1345,11 @@ public final class PubSubServiceImpl implements PubSubService {
         }
 
         String groupPath = connection.name() + "/" + group.getName();
+
+        String securityError = messageSecurityConfigError(config, group, groupPath);
+        if (securityError != null) {
+          throw new UaRuntimeException(StatusCodes.Bad_ConfigurationError, securityError);
+        }
 
         for (DataSetReaderConfig reader : group.getDataSetReaders()) {
           if (!reader.isEnabled()) {
@@ -1440,16 +1512,137 @@ public final class PubSubServiceImpl implements PubSubService {
     return settings == null || settings.getQueueName() == null || settings.getQueueName().isEmpty();
   }
 
-  private static void checkMessageSecurity(@Nullable MessageSecurityConfig security, String path)
-      throws UaException {
+  /**
+   * The K3 message security configuration error of a writer group, or {@code null} when its
+   * effective security is valid: a secured JSON-mapped group is rejected outright — JSON
+   * NetworkMessages have <b>no</b> message security in OPC UA 1.05 (Part 14 §7.3.4.1) — and a
+   * secured UADP group requires a resolvable SecurityGroupRef, a supported security policy, a bound
+   * {@link SecurityKeyProvider}, and valid SecurityKeyServices entries (see {@link
+   * #securedComponentSecurityError}). Enforced at startup, reconfigure, and group activation (the
+   * HG4 activation-backstop precedent); rejections use {@code Bad_ConfigurationError}.
+   *
+   * <p>The JSON rule applies only when the "json" mapping resolves to the built-in provider: a
+   * custom provider shadowing it owns its wire format and is treated like any custom mapping.
+   */
+  @Nullable String messageSecurityConfigError(
+      PubSubConfig config, WriterGroupConfig group, String groupPath) {
 
-    if (security != null && security.getMode() != MessageSecurityMode.None) {
-      throw new UaException(
-          StatusCodes.Bad_NotSupported,
-          "MessageSecurityMode %s is not supported (group '%s'); only None is supported in"
-                  .formatted(security.getMode(), path)
-              + " this version");
+    EffectiveMessageSecurity security = EffectiveMessageSecurity.of(config, group);
+    if (!security.isSecured()) {
+      return null;
     }
+
+    String mappingName = mappingNameOf(group.getMessageSettings());
+    if (MAPPING_JSON.equals(mappingName) && isBuiltinMapping(mappingName)) {
+      return jsonSecurityError(security.mode(), "writer group '%s'".formatted(groupPath));
+    }
+
+    return securedComponentSecurityError(security, "writer group '%s'".formatted(groupPath));
+  }
+
+  /**
+   * The K3 message security configuration error of a reader group — the group's effective security
+   * plus every enabled reader's effective security (a reader-level override is active iff its mode
+   * is not {@code Invalid}) — or {@code null} when valid. Same rows and status-code posture as the
+   * writer-group overload; secured JSON-mapped readers are rejected naming BrokerSecurityConfig.
+   */
+  @Nullable String messageSecurityConfigError(
+      PubSubConfig config, ReaderGroupConfig group, String groupPath) {
+
+    EffectiveMessageSecurity groupSecurity = EffectiveMessageSecurity.of(config, group);
+    if (groupSecurity.isSecured()) {
+      String error =
+          securedComponentSecurityError(groupSecurity, "reader group '%s'".formatted(groupPath));
+      if (error != null) {
+        return error;
+      }
+    }
+
+    for (DataSetReaderConfig reader : group.getDataSetReaders()) {
+      if (!reader.isEnabled()) {
+        continue;
+      }
+      String error =
+          dataSetReaderSecurityError(config, group, reader, groupPath + "/" + reader.getName());
+      if (error != null) {
+        return error;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * The K3 message security configuration error of one dataset reader — its effective security
+   * after the root → group → reader-override inheritance — or {@code null} when valid: the
+   * per-reader rows of the reader-group overload. Also run from {@code
+   * DataSetReaderRuntime#activate}: the group-level checks only see enabled readers, so a reader
+   * enabled (or added by reconfigure) after its group activated is first validated there (the HG4
+   * activation-backstop precedent at reader granularity).
+   */
+  @Nullable String dataSetReaderSecurityError(
+      PubSubConfig config, ReaderGroupConfig group, DataSetReaderConfig reader, String readerPath) {
+
+    EffectiveMessageSecurity readerSecurity = EffectiveMessageSecurity.of(config, group, reader);
+    if (!readerSecurity.isSecured()) {
+      return null;
+    }
+
+    String mappingName = mappingNameOf(reader.getSettings());
+    if (MAPPING_JSON.equals(mappingName) && isBuiltinMapping(mappingName)) {
+      return jsonSecurityError(readerSecurity.mode(), "dataset reader '%s'".formatted(readerPath));
+    }
+    return securedComponentSecurityError(
+        readerSecurity, "dataset reader '%s'".formatted(readerPath));
+  }
+
+  /** JSON has no message security in OPC UA 1.05 (K3 verbatim); point at broker security. */
+  private static String jsonSecurityError(MessageSecurityMode mode, String component) {
+    return ("MessageSecurityMode %s is not supported with JSON NetworkMessages: JSON has no"
+            + " message security in OPC UA 1.05 (Part 14 §7.3.4.1); secure the broker transport"
+            + " via BrokerSecurityConfig instead (%s)")
+        .formatted(mode, component);
+  }
+
+  /**
+   * The rows a secured (UADP or custom-mapped) component must satisfy: a resolvable
+   * SecurityGroupRef, a K2-supported effective policy URI (when one is configured; a null URI
+   * defers to the provider per K8), a bound {@link SecurityKeyProvider}, and — when
+   * SecurityKeyServices endpoints are configured — entries free of {@link
+   * SecurityKeyServiceValidator} errors (K9; warnings are logged, not fatal).
+   */
+  private @Nullable String securedComponentSecurityError(
+      EffectiveMessageSecurity security, String component) {
+
+    SecurityGroupConfig securityGroup = security.securityGroup();
+    if (securityGroup == null) {
+      return "MessageSecurityMode %s requires a resolvable SecurityGroupRef (%s)"
+          .formatted(security.mode(), component);
+    }
+
+    String securityPolicyUri = security.securityPolicyUri();
+    if (securityPolicyUri != null && PubSubSecurityPolicy.fromUri(securityPolicyUri).isEmpty()) {
+      return "unsupported security policy URI '%s' (%s)".formatted(securityPolicyUri, component);
+    }
+
+    if (getSecurityKeyProvider(new SecurityGroupRef(securityGroup.getName())) == null) {
+      return "no SecurityKeyProvider bound for SecurityGroup '%s' (%s)"
+          .formatted(securityGroup.getName(), component);
+    }
+
+    if (!security.securityKeyServices().isEmpty()) {
+      SecurityKeyServiceValidator.Result result =
+          SecurityKeyServiceValidator.validate(security.securityKeyServices());
+      if (!result.errors().isEmpty()) {
+        return "invalid SecurityKeyServices: %s (%s)"
+            .formatted(String.join("; ", result.errors()), component);
+      }
+      result
+          .warnings()
+          .forEach(warning -> LOGGER.warn("SecurityKeyServices ({}): {}", component, warning));
+    }
+
+    return null;
   }
 
   // endregion

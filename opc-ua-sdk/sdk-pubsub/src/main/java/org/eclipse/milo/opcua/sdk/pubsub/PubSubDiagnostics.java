@@ -79,6 +79,38 @@ public interface PubSubDiagnostics {
    *     14 §7.2.3 sequence-number window with a recency result in the invalid band — neither
    *     provably newer nor older than the last processed message, e.g. a huge forward jump after a
    *     publisher restarted its numbering. Same unit and posture as {@code staleSequenceMessages}.
+   * @param encryptionErrors the number of NetworkMessages a secured WriterGroup failed to encode:
+   *     encryption, signing, and nonce composition happen inside the encode of a secured
+   *     NetworkMessage, so any encode failure of a publish cycle that carried a resolved message
+   *     security context counts here (and in the error event stream), never as plaintext sent.
+   *     Ticks at WriterGroup paths (the Part 14 Table 330 {@code EncryptionErrors} feed).
+   * @param decryptionErrors the number of received secured NetworkMessages whose signature verified
+   *     but whose decrypted payload could not be parsed (AES-CTR cannot itself detect corruption,
+   *     so a structural failure inside an authenticated payload is classified as a decryption
+   *     error). Ticks once per affected NetworkMessage at every ReaderGroup with a receiving reader
+   *     matching the message's header identifiers, or at the connection when no group matches (the
+   *     Table 330/331 {@code DecryptionErrors} feed). Sets {@code lastError}.
+   * @param invalidSignatureMessages the number of received secured NetworkMessages dropped whole
+   *     because their signature did not verify against the resolved key material (Part 14
+   *     §7.2.4.4.3.2). Same unit, attribution, and {@code lastError} posture as {@code
+   *     decryptionErrors}. A Milo vendor counter.
+   * @param unknownTokenMessages the number of received secured NetworkMessages dropped because
+   *     their SecurityTokenId is not (yet) in the SecurityGroup's key window — the Part 14 §8.3.2
+   *     unknown-token condition that triggers a single key refresh; expected transiently around key
+   *     rollover. Ticks at ReaderGroup paths, once per NetworkMessage per candidate SecurityGroup.
+   *     A normal-operation counter: no {@code lastError}, no diagnostics event.
+   * @param staleKeyMessages the number of received secured NetworkMessages dropped because the key
+   *     their SecurityTokenId names is expired beyond twice the KeyLifetime (Part 14 §6.2.12.2
+   *     "stop processing messages with the expired key") or names a past key no longer held (past
+   *     keys are never re-fetched). Same attribution and posture as {@code unknownTokenMessages}.
+   * @param securityModeRejectedMessages the number of received NetworkMessages dropped for a
+   *     DataSetReader because the received security mode is below the reader's configured mode
+   *     (Part 14 §7.2.4.3 SHALL — including unsecured messages arriving at a secured reader), or
+   *     because a secured message arrived at a reader with no SecurityGroup to supply keys (a
+   *     None-configured reader necessarily drops secured messages). The unit is NetworkMessages,
+   *     ticked once per (reader, NetworkMessage) at DataSetReader paths. A normal-operation
+   *     counter: no {@code lastError}, no diagnostics event ("counted, not log-stormed"). A Milo
+   *     vendor counter; Part 14 defines no counter for mode-mismatch drops.
    * @param lastError the status code of the most recent error, or {@code null} if no error has
    *     occurred.
    */
@@ -92,5 +124,11 @@ public interface PubSubDiagnostics {
       long sourceErrors,
       long staleSequenceMessages,
       long invalidSequenceMessages,
+      long encryptionErrors,
+      long decryptionErrors,
+      long invalidSignatureMessages,
+      long unknownTokenMessages,
+      long staleKeyMessages,
+      long securityModeRejectedMessages,
       @Nullable StatusCode lastError) {}
 }

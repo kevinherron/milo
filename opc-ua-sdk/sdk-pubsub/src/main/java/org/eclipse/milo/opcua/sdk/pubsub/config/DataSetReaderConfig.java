@@ -42,6 +42,7 @@ public final class DataSetReaderConfig {
   private final MetadataPolicy metadataPolicy;
   private final @Nullable SubscribedDataSetSpec subscribedDataSet;
   private final DataSetReaderMessageSettings settings;
+  private final @Nullable MessageSecurityConfig messageSecurity;
   private final @Nullable BrokerTransportSettings brokerTransport;
   private final Duration messageReceiveTimeout;
   private final UInteger keyFrameCount;
@@ -59,6 +60,7 @@ public final class DataSetReaderConfig {
     this.metadataPolicy = builder.metadataPolicy;
     this.subscribedDataSet = builder.subscribedDataSet;
     this.settings = builder.settings;
+    this.messageSecurity = builder.messageSecurity;
     this.brokerTransport = builder.brokerTransport;
     this.messageReceiveTimeout = builder.messageReceiveTimeout;
     this.keyFrameCount = builder.keyFrameCount;
@@ -152,6 +154,19 @@ public final class DataSetReaderConfig {
   }
 
   /**
+   * Get the message security override of this reader. A DataSetReader may override the security
+   * settings of its reader group, e.g. because the group consumes NetworkMessages from multiple
+   * publishers with different SecurityGroups (Part 14 §6.2.9.9–6.2.9.11).
+   *
+   * @return the {@link MessageSecurityConfig} override, or {@code null} to inherit the reader
+   *     group's message security (emitted as {@code SecurityMode} {@code Invalid} in the Part 14
+   *     configuration model).
+   */
+  public @Nullable MessageSecurityConfig getMessageSecurity() {
+    return messageSecurity;
+  }
+
+  /**
    * Get the broker transport settings of this reader, used on broker-based connections.
    *
    * @return the {@link BrokerTransportSettings}, or {@code null} if not configured.
@@ -225,6 +240,7 @@ public final class DataSetReaderConfig {
     builder.metadataPolicy = metadataPolicy;
     builder.subscribedDataSet = subscribedDataSet;
     builder.settings = settings;
+    builder.messageSecurity = messageSecurity;
     builder.brokerTransport = brokerTransport;
     builder.messageReceiveTimeout = messageReceiveTimeout;
     builder.keyFrameCount = keyFrameCount;
@@ -251,6 +267,7 @@ public final class DataSetReaderConfig {
         && metadataPolicy == that.metadataPolicy
         && Objects.equals(subscribedDataSet, that.subscribedDataSet)
         && settings.equals(that.settings)
+        && Objects.equals(messageSecurity, that.messageSecurity)
         && Objects.equals(brokerTransport, that.brokerTransport)
         && messageReceiveTimeout.equals(that.messageReceiveTimeout)
         && keyFrameCount.equals(that.keyFrameCount)
@@ -271,6 +288,7 @@ public final class DataSetReaderConfig {
         metadataPolicy,
         subscribedDataSet,
         settings,
+        messageSecurity,
         brokerTransport,
         messageReceiveTimeout,
         keyFrameCount,
@@ -301,6 +319,7 @@ public final class DataSetReaderConfig {
     private MetadataPolicy metadataPolicy = MetadataPolicy.REQUIRE_CONFIGURED;
     private @Nullable SubscribedDataSetSpec subscribedDataSet;
     private DataSetReaderMessageSettings settings = UadpDataSetReaderSettings.builder().build();
+    private @Nullable MessageSecurityConfig messageSecurity;
     private @Nullable BrokerTransportSettings brokerTransport;
     private Duration messageReceiveTimeout = Duration.ZERO;
     private UInteger keyFrameCount = uint(0);
@@ -400,6 +419,18 @@ public final class DataSetReaderConfig {
      */
     public Builder settings(DataSetReaderMessageSettings settings) {
       this.settings = settings;
+      return this;
+    }
+
+    /**
+     * Set the message security override of this reader, overriding the security settings of its
+     * reader group (Part 14 §6.2.9.9–6.2.9.11); unset inherits the reader group's message security.
+     *
+     * @param security the {@link MessageSecurityConfig} override.
+     * @return this {@link Builder}.
+     */
+    public Builder messageSecurity(MessageSecurityConfig security) {
+      this.messageSecurity = security;
       return this;
     }
 

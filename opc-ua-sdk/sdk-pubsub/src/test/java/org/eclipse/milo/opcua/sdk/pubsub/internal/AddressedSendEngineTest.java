@@ -228,7 +228,7 @@ class AddressedSendEngineTest {
     ByteBuf buffer = Unpooled.wrappedBuffer(frame);
     try {
       return new UadpMessageMapping()
-          .decode(new DecodeContext(new DefaultEncodingContext()), buffer);
+          .decode(new DecodeContext(new DefaultEncodingContext(), null, null), buffer);
     } finally {
       buffer.release();
     }

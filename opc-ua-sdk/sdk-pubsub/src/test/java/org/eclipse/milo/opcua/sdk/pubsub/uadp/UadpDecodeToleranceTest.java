@@ -40,6 +40,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
 import org.eclipse.milo.opcua.stack.core.types.structured.ConfigurationVersionDataType;
 import org.eclipse.milo.opcua.stack.core.types.structured.DataSetFieldContentMask;
 import org.eclipse.milo.opcua.stack.core.types.structured.UadpDataSetMessageContentMask;
@@ -51,9 +52,9 @@ import org.junit.jupiter.api.Test;
  * raise an exception to the caller; whatever was decoded before the problem is returned.
  *
  * <p>Failures that end decoding early (truncation — including any explicit length field exceeding
- * the remaining bytes — and chunked NetworkMessages) are additionally surfaced via {@link
- * DecodedNetworkMessage#failure()}; tolerated-and-skipped input (foreign version nibbles, reserved
- * flag values) reports no failure.
+ * the remaining bytes — security drops, and chunked NetworkMessages that could not be consumed) are
+ * additionally surfaced via {@link DecodedNetworkMessage#failure()}; tolerated-and-skipped input
+ * (foreign version nibbles, reserved flag values) reports no failure.
  *
  * <p>Bit positions reference OPC UA Part 14 v1.05 §7.2.4.4.2 Table 154 and §7.2.4.5.4 Table 162.
  */
@@ -267,9 +268,13 @@ class UadpDecodeToleranceTest {
 
   // region security
 
-  /** Non-zero SecurityFlags: the payload is skipped but the header is still decoded. */
+  /**
+   * A signed message with no resolver on the DecodeContext: the payload is dropped but the header
+   * is still decoded, and the drop is surfaced as an UNRESOLVED_KEYS failure with the received
+   * SecurityHeader values on {@link DecodedNetworkMessage#security()}.
+   */
   @Test
-  void nonZeroSecurityFlagsSkipPayloadButKeepHeader() {
+  void signedMessageWithoutResolverDropsPayloadButKeepsHeader() {
     byte[] message =
         bytes(
             0xB1, // byte 0: version 1 | PublisherId 0x10 | GroupHeader 0x20 | ExtendedFlags1 0x80
@@ -277,7 +282,9 @@ class UadpDecodeToleranceTest {
             0x07, // PublisherId: Byte = 7
             0x01, // GroupFlags: WriterGroupId
             0x39, 0x05, // WriterGroupId = 1337
-            0x01, // SecurityFlags: NetworkMessage signed; unsupported -> skip payload
+            0x01, // SecurityFlags: NetworkMessage signed
+            0x2A, 0x00, 0x00, 0x00, // SecurityTokenId = 42
+            0x00, // NonceLength = 0 (the literal Table 154 sign-only form)
             0x01, 0x01, 0x00, 0x06, 0x2A, 0x00, 0x00, 0x00); // (would-be payload, not decoded)
 
     DecodedNetworkMessage decoded = decode(message);
@@ -286,6 +293,81 @@ class UadpDecodeToleranceTest {
     assertEquals(ushort(1337), decoded.writerGroupId());
     assertTrue(decoded.messages().isEmpty());
     assertTrue(decoded.metaData().isEmpty());
+
+    // No resolver available: the drop is observable and classified.
+    assertNotNull(decoded.failure());
+    assertEquals(StatusCodes.Bad_SecurityChecksFailed, decoded.failure().statusCode().value());
+    assertEquals(DecodedNetworkMessage.Failure.Reason.UNRESOLVED_KEYS, decoded.failure().reason());
+
+    // The received SecurityHeader values are surfaced even though the message was dropped.
+    assertNotNull(decoded.security());
+    assertEquals(MessageSecurityMode.Sign, decoded.security().mode());
+    assertEquals(uint(42), decoded.security().securityTokenId());
+    assertFalse(decoded.security().forceKeyReset());
+  }
+
+  /** Reserved SecurityFlags bits set: the message is skipped (Part 14 Table 154). */
+  @Test
+  void reservedSecurityFlagsBitsSkipMessage() {
+    byte[] message =
+        bytes(
+            0x91, // byte 0: version 1 | PublisherId | ExtendedFlags1
+            0x10, // ExtendedFlags1: SecurityHeader
+            0x07, // PublisherId: Byte = 7
+            0x11, // SecurityFlags: signed | reserved bit 4
+            0x01, 0x00, 0x00, 0x00, // SecurityTokenId = 1
+            0x00); // NonceLength = 0
+
+    DecodedNetworkMessage decoded = decode(message);
+
+    assertTrue(decoded.messages().isEmpty());
+    assertNull(decoded.security());
+    assertNotNull(decoded.failure());
+    assertEquals(StatusCodes.Bad_NotSupported, decoded.failure().statusCode().value());
+    assertEquals(
+        DecodedNetworkMessage.Failure.Reason.SECURITY_UNSUPPORTED, decoded.failure().reason());
+  }
+
+  /** The SecurityFooter bit: never emitted by the defined policies, unsupported on receive. */
+  @Test
+  void securityFooterBitSkipsMessage() {
+    byte[] message =
+        bytes(
+            0x91, // byte 0: version 1 | PublisherId | ExtendedFlags1
+            0x10, // ExtendedFlags1: SecurityHeader
+            0x07, // PublisherId: Byte = 7
+            0x05, // SecurityFlags: signed | SecurityFooter enabled
+            0x01, 0x00, 0x00, 0x00, // SecurityTokenId = 1
+            0x00); // NonceLength = 0
+
+    DecodedNetworkMessage decoded = decode(message);
+
+    assertTrue(decoded.messages().isEmpty());
+    assertNotNull(decoded.failure());
+    assertEquals(StatusCodes.Bad_NotSupported, decoded.failure().statusCode().value());
+    assertEquals(
+        DecodedNetworkMessage.Failure.Reason.SECURITY_UNSUPPORTED, decoded.failure().reason());
+  }
+
+  /** Encrypted without signed violates Table 154 ("bit 0 shall be true if bit 1 is true"). */
+  @Test
+  void encryptedWithoutSignedSkipsMessage() {
+    byte[] message =
+        bytes(
+            0x91, // byte 0: version 1 | PublisherId | ExtendedFlags1
+            0x10, // ExtendedFlags1: SecurityHeader
+            0x07, // PublisherId: Byte = 7
+            0x02, // SecurityFlags: encrypted WITHOUT signed
+            0x01, 0x00, 0x00, 0x00, // SecurityTokenId = 1
+            0x00); // NonceLength = 0
+
+    DecodedNetworkMessage decoded = decode(message);
+
+    assertTrue(decoded.messages().isEmpty());
+    assertNotNull(decoded.failure());
+    assertEquals(StatusCodes.Bad_SecurityChecksFailed, decoded.failure().statusCode().value());
+    assertEquals(
+        DecodedNetworkMessage.Failure.Reason.SECURITY_MODE_REJECTED, decoded.failure().reason());
   }
 
   /** SecurityFlags == 0 (mode None): the SecurityHeader is consumed and decoding continues. */
@@ -747,7 +829,8 @@ class UadpDecodeToleranceTest {
             null,
             List.of(
                 keyFrame(writer1, 1, goodValue(Variant.ofInt32(42))),
-                keyFrame(writer2, 2, goodValue(Variant.ofInt32(43)))));
+                keyFrame(writer2, 2, goodValue(Variant.ofInt32(43)))),
+            null);
 
     DecodedNetworkMessage decoded = decode(encodeToBytes(context));
 
@@ -816,7 +899,8 @@ class UadpDecodeToleranceTest {
             ushort(1),
             ushort(2),
             new DateTime(3_000L),
-            List.of(draft1, draft2));
+            List.of(draft1, draft2),
+            null);
 
     return encodeToBytes(context);
   }
@@ -896,7 +980,8 @@ class UadpDecodeToleranceTest {
   private DecodedNetworkMessage decode(byte[] message) {
     ByteBuf buffer = Unpooled.wrappedBuffer(message);
     try {
-      return new UadpMessageMapping().decode(new DecodeContext(encodingContext), buffer);
+      return new UadpMessageMapping()
+          .decode(new DecodeContext(encodingContext, null, null), buffer);
     } finally {
       buffer.release();
     }

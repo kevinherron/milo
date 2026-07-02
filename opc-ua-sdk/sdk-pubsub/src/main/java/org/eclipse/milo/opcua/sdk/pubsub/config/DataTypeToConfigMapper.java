@@ -155,6 +155,8 @@ final class DataTypeToConfigMapper {
       builder.connection(mapConnection(connection));
     }
 
+    builder.defaultSecurityKeyServices(nonNullElements(value.getDefaultSecurityKeyServices()));
+
     fromKeyValuePairs(value.getConfigurationProperties()).forEach(builder::property);
 
     return builder.build();
@@ -610,6 +612,13 @@ final class DataTypeToConfigMapper {
       builder.keyFrameCount(reader.getKeyFrameCount());
     }
 
+    MessageSecurityConfig messageSecurity =
+        readerMessageSecurity(
+            reader.getSecurityMode(), reader.getSecurityGroupId(), reader.getSecurityKeyServices());
+    if (messageSecurity != null) {
+      builder.messageSecurity(messageSecurity);
+    }
+
     fromKeyValuePairs(reader.getDataSetReaderProperties()).forEach(builder::property);
 
     DataSetReaderTransportDataType transportSettings = reader.getTransportSettings();
@@ -922,6 +931,7 @@ final class DataTypeToConfigMapper {
     if (!nullOrEmpty(securityGroup.getSecurityGroupId())) {
       builder.securityGroupId(securityGroup.getSecurityGroupId());
     }
+    builder.securityGroupFolder(nonNullElements(securityGroup.getSecurityGroupFolder()));
     if (securityGroup.getSecurityPolicyUri() != null) {
       builder.securityPolicyUri(securityGroup.getSecurityPolicyUri());
     }
@@ -934,6 +944,7 @@ final class DataTypeToConfigMapper {
     if (securityGroup.getMaxPastKeyCount() != null) {
       builder.maxPastKeyCount(securityGroup.getMaxPastKeyCount());
     }
+    builder.rolePermissions(nonNullElements(securityGroup.getRolePermissions()));
 
     fromKeyValuePairs(securityGroup.getGroupProperties()).forEach(builder::property);
 
@@ -992,7 +1003,36 @@ final class DataTypeToConfigMapper {
       builder.securityGroup(resolveSecurityGroupRef(securityGroupId));
     }
     if (!servicesAbsent) {
-      builder.keyServices(Arrays.stream(keyServices).toList());
+      builder.keyServices(nonNullElements(keyServices));
+    }
+    return builder.build();
+  }
+
+  /**
+   * Build a reader-level {@link MessageSecurityConfig} override from DataSetReader security fields;
+   * SecurityMode Invalid (the Part 14 §6.2.9.9 "no override" sentinel, normalized from null) with
+   * no group id and no key services maps to absent.
+   */
+  private @Nullable MessageSecurityConfig readerMessageSecurity(
+      @Nullable MessageSecurityMode mode,
+      @Nullable String securityGroupId,
+      EndpointDescription @Nullable [] keyServices) {
+
+    boolean modeAbsent = mode == null || mode == MessageSecurityMode.Invalid;
+    boolean groupAbsent = nullOrEmpty(securityGroupId);
+    boolean servicesAbsent = keyServices == null || keyServices.length == 0;
+
+    if (modeAbsent && groupAbsent && servicesAbsent) {
+      return null;
+    }
+
+    MessageSecurityConfig.Builder builder = MessageSecurityConfig.builder();
+    builder.mode(mode != null ? mode : MessageSecurityMode.Invalid);
+    if (!groupAbsent) {
+      builder.securityGroup(resolveSecurityGroupRef(securityGroupId));
+    }
+    if (!servicesAbsent) {
+      builder.keyServices(nonNullElements(keyServices));
     }
     return builder.build();
   }

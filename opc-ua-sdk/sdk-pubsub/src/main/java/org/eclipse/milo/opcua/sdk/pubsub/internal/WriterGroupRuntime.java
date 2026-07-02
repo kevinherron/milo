@@ -23,11 +23,14 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.milo.opcua.sdk.pubsub.ComponentType;
 import org.eclipse.milo.opcua.sdk.pubsub.config.BrokerTransportSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetWriterConfig;
-import org.eclipse.milo.opcua.sdk.pubsub.config.MessageSecurityConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.EffectiveMessageSecurity;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublisherId;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupRef;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpWriterGroupSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UdpConnectionConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.WriterGroupConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.security.MessageSecurityContext;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.BrokerQualityOfService;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.BrokerTopics;
 import org.eclipse.milo.opcua.sdk.pubsub.transport.MessageAddress;
@@ -43,7 +46,6 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.BrokerTransportQualityOfService;
-import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -100,6 +102,20 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
   private final @Nullable Duration keepAliveTime;
   private final String mappingName;
 
+  /** The group's effective message security, resolved against the ctor-time config generation. */
+  private final EffectiveMessageSecurity effectiveSecurity;
+
+  /** The SecurityGroupRef securing this group; null when the effective mode is not secured. */
+  private final @Nullable SecurityGroupRef securityGroupRef;
+
+  /**
+   * Whether every SecurityGroupRef this group registered for already had keys at activation:
+   * consulted by {@link #startupCompletesImmediately()} right after {@link #activate()} returns.
+   * When false the group stays {@code PreOperational} until the key manager's first successful
+   * fetch completes startup (Part 14 §5.4.5.3).
+   */
+  private volatile boolean securityKeysReady = false;
+
   private volatile List<DataSetWriterRuntime> writers;
   private volatile @Nullable MessageMappingProvider mapping;
   private volatile UInteger groupVersion = uint(0);
@@ -133,6 +149,13 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
     this.config = config;
     this.keepAliveTime = config.getKeepAliveTime();
     this.mappingName = PubSubServiceImpl.mappingNameOf(config.getMessageSettings());
+
+    this.effectiveSecurity = EffectiveMessageSecurity.of(service.getConfig(), config);
+    SecurityGroupConfig securityGroup = effectiveSecurity.securityGroup();
+    this.securityGroupRef =
+        effectiveSecurity.isSecured() && securityGroup != null
+            ? new SecurityGroupRef(securityGroup.getName())
+            : null;
 
     var writers = new ArrayList<DataSetWriterRuntime>();
     for (DataSetWriterConfig writerConfig : config.getDataSetWriters()) {
@@ -194,6 +217,18 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
 
     connection.ensurePublisherChannel();
 
+    if (securityGroupRef != null) {
+      // registration schedules the first key fetch asynchronously; the group stays
+      // PreOperational until it succeeds (see startupCompletesImmediately)
+      SecurityGroupConfig securityGroup = effectiveSecurity.securityGroup();
+      if (securityGroup != null) {
+        service
+            .getSecurityKeyManager()
+            .register(securityGroup, securityGroupRef, this, effectiveSecurity.securityPolicyUri());
+        securityKeysReady = service.getSecurityKeyManager().allKeysAvailable(this);
+      }
+    }
+
     groupVersion = resolveGroupVersion();
 
     long now = System.nanoTime();
@@ -217,9 +252,24 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
                 () -> publishSafely(generation), 0, intervalNanos, TimeUnit.NANOSECONDS);
   }
 
+  /**
+   * A secured group completes startup only when key material is available: with keys already
+   * present at activation (re-activation, shared SecurityGroup) startup completes immediately,
+   * otherwise the group stays {@code PreOperational} until the key manager's first successful fetch
+   * (Part 14 §5.4.5.3: "If the initial pull or push fails, the affected PubSub components like
+   * WriterGroup or DataSetReader stay in the PreOperational state").
+   */
+  @Override
+  boolean startupCompletesImmediately() {
+    return securityGroupRef == null || securityKeysReady;
+  }
+
   @Override
   void deactivate() {
     generation++;
+
+    service.getSecurityKeyManager().unregister(this);
+    securityKeysReady = false;
 
     ScheduledFuture<?> publishTask = this.publishTask;
     this.publishTask = null;
@@ -255,16 +305,17 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
     return null;
   }
 
+  /**
+   * Re-run the K3 message security validation at activation (the HG4 activation-backstop
+   * precedent): a secured JSON-mapped group, or a secured group without a resolvable
+   * SecurityGroupRef, a supported policy, or a bound SecurityKeyProvider, fails into {@code
+   * PubSubState.Error} with {@code Bad_ConfigurationError}. Startup/reconfigure validation only
+   * sees enabled components, so this closes the disabled-at-startup-then-enabled gap.
+   */
   private void checkMessageSecurity() throws UaException {
-    MessageSecurityConfig security = config.getMessageSecurity();
-
-    if (security != null && security.getMode() != MessageSecurityMode.None) {
-      var e =
-          new UaException(
-              StatusCodes.Bad_NotSupported,
-              "MessageSecurityMode %s is not supported (writer group '%s'); only None is"
-                      .formatted(security.getMode(), path())
-                  + " supported in this version");
+    String error = service.messageSecurityConfigError(service.getConfig(), config, path());
+    if (error != null) {
+      var e = new UaException(StatusCodes.Bad_ConfigurationError, error);
       service.getDiagnostics().error(path(), e.getStatusCode(), e.getMessage(), e);
       throw e;
     }
@@ -343,6 +394,44 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
       return;
     }
 
+    // one coherent (token, material, nonce-counter) triple per publish cycle: everything this
+    // cycle emits — key/delta frames and keep-alives alike — is secured under the same context.
+    // The context carries a cycle-owned COPY of the key material (the cycle spans user source
+    // reads of unbounded duration, so it must not borrow window material that key retirement
+    // could destroy mid-cycle); the copy is wiped in the finally below when the cycle completes.
+    MessageSecurityContext securityContext = null;
+    if (securityGroupRef != null) {
+      securityContext =
+          service
+              .getSecurityKeyManager()
+              .publishContext(securityGroupRef, effectiveSecurity.mode());
+      if (securityContext == null) {
+        // no usable key material (initial fetch pending or keys expired beyond 2x KeyLifetime):
+        // send NOTHING this cycle (Part 14 §6.2.12.2); the key manager owns the state
+        // transitions and diagnostics for both cases
+        return;
+      }
+    }
+
+    try {
+      publishCycle(mapping, channel, publisherId, securityContext);
+    } finally {
+      if (securityContext != null) {
+        securityContext.keyMaterial().destroy();
+      }
+    }
+  }
+
+  /**
+   * The body of one publish cycle: draft, partition, encode, and send. Split from {@link #publish}
+   * so the cycle-owned key material copy is destroyed on every exit path.
+   */
+  private void publishCycle(
+      MessageMappingProvider mapping,
+      PublisherChannel channel,
+      PublisherId publisherId,
+      @Nullable MessageSecurityContext securityContext) {
+
     long nowNanos = System.nanoTime();
     DateTime now = DateTime.now();
     Long keepAliveNanos = keepAliveTime != null ? keepAliveTime.toNanos() : null;
@@ -391,13 +480,29 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
     for (Partition partition : partitions) {
       if (!partition.drafts.isEmpty()) {
         publishPartition(
-            mapping, channel, publisherId, now, nowNanos, broker, partition, notTransmitted);
+            mapping,
+            channel,
+            publisherId,
+            securityContext,
+            now,
+            nowNanos,
+            broker,
+            partition,
+            notTransmitted);
       }
     }
 
     if (keepAliveNanos != null && !notTransmitted.isEmpty()) {
       publishKeepAlivesForUntransmitted(
-          mapping, channel, publisherId, now, nowNanos, keepAliveNanos, broker, notTransmitted);
+          mapping,
+          channel,
+          publisherId,
+          securityContext,
+          now,
+          nowNanos,
+          keepAliveNanos,
+          broker,
+          notTransmitted);
     }
   }
 
@@ -416,6 +521,7 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
       MessageMappingProvider mapping,
       PublisherChannel channel,
       PublisherId publisherId,
+      @Nullable MessageSecurityContext securityContext,
       DateTime now,
       long nowNanos,
       long keepAliveNanos,
@@ -447,7 +553,8 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
       if (!partition.drafts.isEmpty()) {
         // null: a keep-alive that is itself not transmitted gets no further recovery this
         // cycle; lastSentNanos stays behind, so the next cycle simply tries again
-        publishPartition(mapping, channel, publisherId, now, nowNanos, broker, partition, null);
+        publishPartition(
+            mapping, channel, publisherId, securityContext, now, nowNanos, broker, partition, null);
       }
     }
   }
@@ -479,6 +586,7 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
       MessageMappingProvider mapping,
       PublisherChannel channel,
       PublisherId publisherId,
+      @Nullable MessageSecurityContext securityContext,
       DateTime now,
       long nowNanos,
       boolean broker,
@@ -494,15 +602,26 @@ final class WriterGroupRuntime extends AbstractComponentRuntime {
             ushort(1),
             nextNetworkMessageSequenceNumber(),
             networkMessageTimestamp(now),
-            partition.drafts);
+            partition.drafts,
+            securityContext);
 
     List<EncodedNetworkMessage> encodedMessages;
     try {
       encodedMessages = mapping.encode(encodeContext);
     } catch (Exception e) {
-      service
-          .getDiagnostics()
-          .error(path(), statusCodeOf(e), "failed to encode NetworkMessage: " + e.getMessage(), e);
+      if (securityContext != null) {
+        // encryption, signing, and nonce composition are inline with the encode of a secured
+        // NetworkMessage: a secured encode failure counts as an encryption error (K6)
+        service
+            .getDiagnostics()
+            .encryptionError(
+                path(), statusCodeOf(e), "failed to encode NetworkMessage: " + e.getMessage(), e);
+      } else {
+        service
+            .getDiagnostics()
+            .error(
+                path(), statusCodeOf(e), "failed to encode NetworkMessage: " + e.getMessage(), e);
+      }
       // nothing of this partition was transmitted
       invalidateDeltaBaselines(partition, List.of(), notTransmitted);
       return;

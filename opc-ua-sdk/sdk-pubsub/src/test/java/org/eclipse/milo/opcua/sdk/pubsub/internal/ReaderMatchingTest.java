@@ -318,7 +318,8 @@ class ReaderMatchingTest {
                     ushort(1),
                     ushort(networkMessageSequenceNumber),
                     null,
-                    List.of(drafts)));
+                    List.of(drafts),
+                    null));
 
     ByteBuf data = encoded.get(0).data();
     try {
@@ -699,9 +700,15 @@ class ReaderMatchingTest {
     assertEquals(1, eventCount("R1"));
   }
 
-  /** An inbound chunked NetworkMessage is no longer silently skipped (Part 14 §7.2.4.4.4). */
+  /**
+   * Inbound chunked NetworkMessages are consumed by the connection's per-connection reassembler
+   * (Part 14 §7.2.4.4.4); a chunk the reassembler cannot key or parse — here one without the
+   * PayloadHeader that carries the chunk's DataSetWriterId, and truncated chunk fields — still
+   * ticks connection decodeErrors, now with {@code Bad_DecodingError} (chunked input stopped being
+   * {@code Bad_NotSupported} when reassembly was wired in Phase 4).
+   */
   @Test
-  void chunkedNetworkMessageTicksConnectionDecodeErrorsWithBadNotSupported() throws Exception {
+  void malformedChunkedNetworkMessageTicksConnectionDecodeErrors() throws Exception {
     startService(DataSetReaderConfig.builder("R1").build());
 
     injectAndFlush(
@@ -709,13 +716,13 @@ class ReaderMatchingTest {
             0x81, // byte 0: version 1 | ExtendedFlags1
             0x80, // ExtendedFlags1: ExtendedFlags2 present
             0x01, // ExtendedFlags2: chunk
-            0x01, 0x00, 0x05, 0x00, 0x00, 0x00)); // (chunk data, skipped)
+            0x01, 0x00, 0x05, 0x00, 0x00, 0x00)); // truncated chunk fields, no PayloadHeader
 
     assertEquals(0, eventCount("R1"));
 
     PubSubDiagnostics.ComponentDiagnostics connection = diagnostics("conn");
     assertEquals(1, connection.decodeErrors());
-    assertEquals(new StatusCode(StatusCodes.Bad_NotSupported), connection.lastError());
+    assertEquals(new StatusCode(StatusCodes.Bad_DecodingError), connection.lastError());
   }
 
   /**

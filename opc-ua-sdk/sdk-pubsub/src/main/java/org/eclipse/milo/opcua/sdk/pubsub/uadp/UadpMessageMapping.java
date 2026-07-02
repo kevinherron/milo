@@ -35,19 +35,28 @@ import org.eclipse.milo.opcua.stack.core.types.structured.DataSetMetaDataType;
  * emitted, and each writer's {@link UadpDataSetWriterSettings} and {@link DataSetFieldContentMask}
  * decide the DataSetMessage header fields and the field representation (Variant or DataValue). The
  * Sizes array is emitted iff the PayloadHeader is enabled and there is more than one
- * DataSetMessage. Out of scope and rejected with {@code Bad_NotSupported}: Event message emission,
- * the RawData field encoding, PromotedFields emission, and any message security mode other than
- * None.
+ * DataSetMessage. Message security (Part 14 §7.2.4.4.3) is applied when the {@link
+ * EncodeContext#securityContext()} is present: the SecurityHeader is written, the payload encrypted
+ * in place for SignAndEncrypt, and the whole NetworkMessage signed with the signature appended; a
+ * {@code null} security context produces the unsecured layout, byte-identical to a mode-None group.
+ * Out of scope and rejected with {@code Bad_NotSupported}: Event message emission, the RawData
+ * field encoding, PromotedFields emission, and chunk emission.
  *
  * <p><b>Decoding</b> is tolerant and never throws on malformed or unsupported input: whatever was
  * decoded successfully is returned, possibly an empty {@link DecodedNetworkMessage}. Data Key
  * Frame, Data Delta Frame, Event, and Keep Alive DataSetMessages and discovery DataSetMetaData
  * announcements are decoded; DataSetMessages that cannot be decoded (RawData field encoding,
  * reserved types, the valid bit clear on the wire) are returned with {@code valid == false} and no
- * fields. NetworkMessages that are chunked, carry an ActionHeader, or indicate any security other
- * than None have their payloads skipped. Truncated or malformed input and chunked NetworkMessages
- * additionally report a {@link DecodedNetworkMessage#failure()} alongside whatever was decoded
- * before the failure point.
+ * fields. Secured NetworkMessages are verified — before any payload parsing — and decrypted (into a
+ * copy; the arrival buffer is never mutated) against key material from the {@link
+ * DecodeContext#securityContextResolver()}; a secured message that fails a security check is
+ * dropped whole, with the received token id, mode, and force-key-reset bit still surfaced via
+ * {@link DecodedNetworkMessage#security()}. Chunked NetworkMessages are reassembled through the
+ * caller-owned {@link DecodeContext#chunkReassembler()} and dropped when none is available.
+ * NetworkMessages that carry an ActionHeader have their payloads skipped. Truncated or malformed
+ * input, security drops, and chunked NetworkMessages that could not be consumed additionally report
+ * a {@link DecodedNetworkMessage#failure()} — classified by {@link
+ * DecodedNetworkMessage.Failure.Reason} — alongside whatever was decoded before the failure point.
  *
  * <p><b>Discovery</b> (OPC UA Part 14 §7.2.4.6) is UADP-internal and not part of the {@link
  * MessageMappingProvider} SPI. {@link #decodeMessage(DecodeContext, ByteBuf)} surfaces

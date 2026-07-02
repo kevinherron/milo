@@ -24,8 +24,10 @@ import org.eclipse.milo.opcua.sdk.pubsub.DataSetReceivedEvent;
 import org.eclipse.milo.opcua.sdk.pubsub.MetaDataReceivedEvent;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetMetaDataConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.DataSetReaderConfig;
+import org.eclipse.milo.opcua.sdk.pubsub.config.EffectiveMessageSecurity;
 import org.eclipse.milo.opcua.sdk.pubsub.config.MetadataPolicy;
 import org.eclipse.milo.opcua.sdk.pubsub.config.PublisherId;
+import org.eclipse.milo.opcua.sdk.pubsub.config.SecurityGroupConfig;
 import org.eclipse.milo.opcua.sdk.pubsub.config.UadpDataSetReaderSettings;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.DataSetMessageKind;
 import org.eclipse.milo.opcua.sdk.pubsub.uadp.DecodeContext;
@@ -43,6 +45,7 @@ import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.PubSubState;
 import org.eclipse.milo.opcua.stack.core.types.structured.ConfigurationVersionDataType;
 import org.jspecify.annotations.Nullable;
@@ -92,6 +95,26 @@ import org.jspecify.annotations.Nullable;
  * they refresh the stream's §7.2.3 record-discard clock (a keep-alive is a received message), and
  * they always reset the receive timeout — while the NetworkMessage that carries them is an ordinary
  * NetworkMessage whose sequence number advances the NetworkMessage window normally.
+ *
+ * <p><b>Message security</b> (Phase 4): decode runs with the connection's {@link
+ * ReaderSecurityResolver} and per-connection {@code ChunkReassembler} on the {@link DecodeContext}.
+ * Security-failure classification maps the decoder's failure taxonomy to the per-component
+ * counters: {@code SIGNATURE_INVALID} to {@code invalidSignatureMessages} and {@code
+ * DECRYPT_FAILED} to {@code decryptionErrors} (ticked at each matched reader group, or the
+ * connection when none matches); {@code UNRESOLVED_KEYS} is counted by the resolver (unknown token,
+ * stale key) or the per-reader mode gate here, never twice; the remaining reasons flow through the
+ * existing {@code decodeErrors} path. Per K7 (§7.2.4.3), a per-reader security gate runs BEFORE the
+ * sequence windows: a reader drops (counted in {@code securityModeRejectedMessages})
+ * NetworkMessages whose received mode is below its configured mode — including unsecured messages
+ * at a secured reader — and secured messages it has no SecurityGroup to supply keys for; a message
+ * secured <em>above</em> the configured mode is processed when keys resolved (the MAY). Per K18, a
+ * message that failed its security checks (unsupported header, rejected mode, unresolved keys,
+ * invalid signature, or any decode failure on a secured message that never passed signature
+ * verification — e.g. one truncated too short to carry its signature) never advances any sequence
+ * window and delivers nothing — with security active, only verified messages reach the §7.2.3
+ * window (a DECRYPT_FAILED message passed verification: its authentic partial content still flows).
+ * Discovery metadata announcements stay mode-None by design (K10) and are exempt from the mode
+ * gate. A received force-key-reset flag triggers a proactive key refresh even on dropped messages.
  */
 final class ReaderDispatcher {
 
@@ -129,13 +152,21 @@ final class ReaderDispatcher {
     Set<String> mappingsWithContent = null;
     List<DecodeFailure> failures = null;
 
+    // the security resolver and the (stateful, per-connection) chunk reassembler ride the
+    // context: the same reassembler instance must see every decode of this connection or
+    // reassembly never completes
+    DecodeContext context =
+        DecodeContext.of(
+            service.getEncodingContext(),
+            connection.securityResolver(),
+            connection.chunkReassembler());
+
     for (Map.Entry<String, MessageMappingProvider> entry : mappings.entrySet()) {
       String mappingName = entry.getKey();
       MessageMappingProvider provider = entry.getValue();
 
       UadpDecodedMessage decoded;
       try {
-        DecodeContext context = DecodeContext.of(service.getEncodingContext());
         if (provider instanceof UadpMessageMapping uadpMapping) {
           decoded = uadpMapping.decodeMessage(context, buffer.slice());
         } else {
@@ -158,17 +189,33 @@ final class ReaderDispatcher {
       DecodedNetworkMessage.Failure failure =
           decoded instanceof DecodedNetworkMessage networkMessage ? networkMessage.failure() : null;
       if (failure != null) {
-        // the tolerant UADP decode surfaced a failure: count it, but still deliver whatever was
-        // decoded before the failure point (partial-delivery posture)
-        if (failures == null) {
-          failures = new ArrayList<>(1);
+        switch (failure.reason()) {
+          case UNRESOLVED_KEYS -> {
+            // deliberately uncounted here: the resolution-time drop was already counted at its
+            // deciding point — the resolver/key manager (unknown token, stale key) or the
+            // per-reader mode gate in handleDecoded — counting the decoder failure too would
+            // double count
+          }
+          case SIGNATURE_INVALID ->
+              securityFailure(
+                  connection, (DecodedNetworkMessage) decoded, failure, oversizeGroups, true);
+          case DECRYPT_FAILED ->
+              securityFailure(
+                  connection, (DecodedNetworkMessage) decoded, failure, oversizeGroups, false);
+          default -> {
+            // the tolerant UADP decode surfaced a failure: count it via the decodeErrors path,
+            // but still deliver whatever was decoded before the failure point
+            if (failures == null) {
+              failures = new ArrayList<>(1);
+            }
+            failures.add(
+                new DecodeFailure(
+                    mappingName,
+                    failure.statusCode(),
+                    "failed to decode NetworkMessage: " + failure.message(),
+                    failure.cause()));
+          }
         }
-        failures.add(
-            new DecodeFailure(
-                mappingName,
-                failure.statusCode(),
-                "failed to decode NetworkMessage: " + failure.message(),
-                failure.cause()));
       }
 
       // content is tracked independently of failure: a truncated message that still delivered a
@@ -209,6 +256,119 @@ final class ReaderDispatcher {
   /** A decode failure deferred until every mapping has had its decode attempt. */
   private record DecodeFailure(
       String mappingName, StatusCode statusCode, String message, @Nullable Throwable error) {}
+
+  /**
+   * Count a definitive security verdict on a received secured NetworkMessage — an invalid signature
+   * ({@code invalidSignatureMessages}) or an authenticated-but-unparseable payload ({@code
+   * decryptionErrors}) — once at every reader group with a receiving reader matching the message's
+   * plaintext header identifiers, or at the connection when no group matches (so tampered traffic
+   * aimed at nobody is still observable). Not subject to the mixed-mapping decode-failure
+   * suppression: a failed signature on resolved key material is a real security event regardless of
+   * what other mappings made of the same bytes.
+   */
+  private void securityFailure(
+      ConnectionRuntime connection,
+      DecodedNetworkMessage decoded,
+      DecodedNetworkMessage.Failure failure,
+      Set<ReaderGroupRuntime> oversizeGroups,
+      boolean invalidSignature) {
+
+    String message = "secured NetworkMessage dropped: " + failure.message();
+
+    boolean attributed = false;
+    for (ReaderGroupRuntime group : connection.readerGroupRuntimes()) {
+      if (oversizeGroups.contains(group)) {
+        continue;
+      }
+      for (DataSetReaderRuntime reader : group.readerRuntimes()) {
+        if (isNotReceiving(reader.state())) {
+          continue;
+        }
+        if (matchesNetworkMessage(reader.config(), decoded)) {
+          attributed = true;
+          if (invalidSignature) {
+            service
+                .getDiagnostics()
+                .invalidSignatureMessage(
+                    group.path(), failure.statusCode(), message, failure.cause());
+          } else {
+            service
+                .getDiagnostics()
+                .decryptionError(group.path(), failure.statusCode(), message, failure.cause());
+          }
+          break;
+        }
+      }
+    }
+
+    if (!attributed) {
+      if (invalidSignature) {
+        service
+            .getDiagnostics()
+            .invalidSignatureMessage(
+                connection.path(), failure.statusCode(), message, failure.cause());
+      } else {
+        service
+            .getDiagnostics()
+            .decryptionError(connection.path(), failure.statusCode(), message, failure.cause());
+      }
+    }
+  }
+
+  /**
+   * Whether a decode failure means the message failed its security checks: such a message delivers
+   * nothing and must not advance any sequence window (K18 — only verified messages reach the §7.2.3
+   * window). {@code DECRYPT_FAILED} is deliberately NOT a fixed member of this set: its signature
+   * verified, so its authentic partial content flows through the normal path — and by the same
+   * reasoning any failure on a secured message that never passed verification IS a security drop,
+   * whatever its taxonomy bucket: a secured message truncated too short to carry its signature is
+   * classified {@code DECODING_ERROR} before {@code verify()} ever runs, and its attacker-supplied
+   * plaintext GroupHeader sequence number must not poison the window (an off-path attacker can
+   * craft one from any observed live tokenId, no key knowledge required). Unsecured messages
+   * ({@code security == null} or the processed-as-unsecured force-key-reset-only mode-None header)
+   * keep the pre-existing HG2 partial-decode window behavior.
+   */
+  private static boolean isSecurityDrop(
+      DecodedNetworkMessage.Failure.Reason reason,
+      DecodedNetworkMessage.@Nullable Security security) {
+
+    return switch (reason) {
+      case SECURITY_UNSUPPORTED, SECURITY_MODE_REJECTED, UNRESOLVED_KEYS, SIGNATURE_INVALID -> true;
+      case DECODING_ERROR, DECRYPT_FAILED, CHUNK ->
+          // a failure on a secured message that never verified is unauthenticated (K18); a
+          // failure on a VERIFIED secured message occurred after verification (sign-only payload
+          // parse, decrypted-payload structure, chunk consumption) and its authentic content and
+          // header values flow the normal tolerant path
+          security != null && security.mode() != MessageSecurityMode.None && !security.verified();
+    };
+  }
+
+  /**
+   * The per-reader K7 security gate (Part 14 §7.2.4.3): a reader SHALL drop messages whose received
+   * mode is below its configured effective mode — an unsecured message at a secured reader included
+   * — and necessarily drops messages secured <em>above</em> its configured mode when it has no
+   * SecurityGroup to supply keys; with a SecurityGroup, processing above the configured mode is the
+   * spec's MAY. Runs BEFORE the sequence windows so a rejected (and, for received-below-configured,
+   * unverified) message can never advance a window (K18).
+   */
+  private static boolean securityGateRejects(
+      DataSetReaderRuntime reader, DecodedNetworkMessage.@Nullable Security security) {
+
+    EffectiveMessageSecurity configured = reader.effectiveSecurity();
+
+    int received =
+        security == null ? MessageSecurityMode.None.getValue() : security.mode().getValue();
+    int required = configured.mode().getValue();
+
+    if (received < required) {
+      return true;
+    }
+    if (received > required) {
+      SecurityGroupConfig securityGroup = configured.securityGroup();
+      return securityGroup == null;
+    }
+    return false;
+  }
 
   /**
    * Whether any mapping other than {@code mappingName} decoded content from the buffer: the
@@ -286,6 +446,18 @@ final class ReaderDispatcher {
       DecodedNetworkMessage decoded,
       Set<ReaderGroupRuntime> oversizeGroups) {
 
+    DecodedNetworkMessage.Security security = decoded.security();
+    DecodedNetworkMessage.Failure failure = decoded.failure();
+    boolean securityDropped = failure != null && isSecurityDrop(failure.reason(), security);
+    boolean unresolvedKeys =
+        failure != null && failure.reason() == DecodedNetworkMessage.Failure.Reason.UNRESOLVED_KEYS;
+
+    if (security != null && security.forceKeyReset()) {
+      // Table 154 bit 3: the publisher is about to invalidate its keys — refresh proactively
+      // (K6, subscriber side). Surfaced even on dropped messages, so this runs before any gate.
+      connection.securityResolver().onForceKeyReset(decoded.publisherId(), decoded.writerGroupId());
+    }
+
     for (ReaderGroupRuntime group : connection.readerGroupRuntimes()) {
       if (oversizeGroups.contains(group)) {
         continue;
@@ -301,7 +473,8 @@ final class ReaderDispatcher {
           continue;
         }
 
-        // metadata announcements match on (PublisherId, DataSetWriterId) only
+        // metadata announcements match on (PublisherId, DataSetWriterId) only; discovery and
+        // metadata NetworkMessages stay mode-None by design (K10), so no mode gate applies
         for (DecodedMetaData metaData : decoded.metaData()) {
           if (publisherIdMatches(reader.config(), decoded.publisherId())
               && dataSetWriterIdMatches(reader.config(), metaData.dataSetWriterId())) {
@@ -310,6 +483,26 @@ final class ReaderDispatcher {
         }
 
         if (matchesNetworkMessage(reader.config(), decoded)) {
+          if (securityDropped) {
+            // K18: a message that failed its security checks delivers nothing and must not
+            // advance any sequence window. For the resolver-decided UNRESOLVED_KEYS drop the
+            // per-reader K7 mode drops are still counted here (the resolver skips
+            // mode-incompatible readers without counting; this is the single counting point) —
+            // decoder-decided and signature verdicts were counted in dispatch().
+            if (unresolvedKeys && securityGateRejects(reader, security)) {
+              service.getDiagnostics().securityModeRejectedMessage(reader.path());
+            }
+            continue;
+          }
+
+          if (securityGateRejects(reader, security)) {
+            // §7.2.4.3 SHALL: dropped for this reader, counted, and — deliberately BEFORE the
+            // window observation — never advancing the reader's sequence windows: an unsecured
+            // (unverified) message must not move a secured reader's replay window (K18)
+            service.getDiagnostics().securityModeRejectedMessage(reader.path());
+            continue;
+          }
+
           long nowNanos = System.nanoTime();
 
           // one NetworkMessage-window observation per (reader, NetworkMessage), BEFORE the
@@ -743,8 +936,8 @@ final class ReaderDispatcher {
     return -1;
   }
 
-  private static boolean publisherIdMatches(
-      DataSetReaderConfig config, @Nullable PublisherId publisherId) {
+  /** Shared with {@link ReaderSecurityResolver}, which matches on the same wire identifiers. */
+  static boolean publisherIdMatches(DataSetReaderConfig config, @Nullable PublisherId publisherId) {
 
     PublisherId filter = config.getPublisherId();
 
