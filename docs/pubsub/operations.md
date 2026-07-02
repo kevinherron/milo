@@ -87,11 +87,14 @@ a silent one to the watchdog. Keep-alives, by contrast, always reset it, whateve
 makes of them. A positive timeout also sets the window's record-discard clock (twice the
 timeout; see below), which is what lets a subscriber ride out a publisher restart.
 
-This watchdog is the subscriber's only staleness signal, so use it whenever silence matters.
-It is especially relevant over MQTT: a broker outage surfaces on the publisher side only as
-send-failure diagnostics (flattened to `Bad_CommunicationError`) and never changes publisher
-state, so subscriber-side `messageReceiveTimeout` is the one mechanism that turns an outage
-into a state transition.
+This watchdog is the subscriber's staleness signal, so use it whenever silence matters — it
+catches a publisher that simply stops sending, which no transport callback can. A broker outage
+is now also visible directly: over MQTT a disconnect drives the connection (publisher or
+subscriber) to `Error` with its children `Paused`, and a reconnect recovers it — the R16
+transport-state mapping, covered in
+[the MQTT transport](mqtt.md#broker-outages-and-reconnect). Send failures during the outage no
+longer flatten to a blanket `Bad_CommunicationError`; the real status (`Bad_ServerNotConnected`
+while disconnected) reaches diagnostics.
 
 ## Sequence numbers and duplicate handling
 
@@ -334,8 +337,14 @@ keep-alive reseed when the writer emits keep-alives, otherwise the record discar
 above (`"pub-conn/group/writer"`, `"sub-conn/readers/reader"`). Each `ComponentDiagnostics`
 carries `networkMessagesSent`, `networkMessagesReceived`, `dataSetMessagesSent`,
 `dataSetMessagesReceived`, `decodeErrors`, `sourceErrors`, the per-reader sequence-drop
-counters `staleSequenceMessages` and `invalidSequenceMessages`, and a nullable `lastError`
-status code; counters that do not apply to a component type stay zero.
+counters `staleSequenceMessages` and `invalidSequenceMessages`, the send-failure counters
+`failedTransmissions` (writer group) and `failedDataSetMessages` (per contributing writer), the
+message-security counters `encryptionErrors` and `decryptionErrors`, the six Part 14
+state-transition counters, and a nullable `lastError` status code; counters that do not apply to a
+component type stay zero. Every counter also carries a `timeFirstChange` — the timestamp it first
+left zero — and `reset(path)` zeroes one component's counters and their timestamps, leaving
+`lastError` untouched. These same counters back the ns0 diagnostics tree the server module can
+expose ([server integration](server-integration.md#diagnostics-and-status-events)).
 
 A few counters reward knowing exactly where they tick. `networkMessagesReceived` on a
 connection counts data-path arrivals — one tick per datagram or broker message, before decoding
@@ -360,7 +369,9 @@ path with `Bad_EncodingLimitsExceeded` and the actual and maximum sizes) — eac
 `PubSubDiagnosticsEvent` with the component path, a classifying `StatusCode`, a message, and
 the underlying exception when there is one. Happy-path activity is visible only through the
 counters, and sequence-window drops emit no events at all; do not wait for informational events
-that will never come.
+that will never come. Listeners can be unregistered by identity: `removeDiagnosticsListener`
+complements `addDiagnosticsListener`, and `removeStateListener`, `removeDataSetListener`, and
+`removeMetaDataListener` do the same for the other listener kinds.
 
 ## Threading and shutdown
 
@@ -437,9 +448,6 @@ reads as publisher death.
 
 ## Known limits
 
-- There is no listener-removal API: `PubSubService` has `add*` methods only. Listeners live as
-  long as the service; embedders that outlive their interest in events must make their
-  listeners self-disabling.
 - Sequence-number rejects are dropped, never reordered: there is no reorder buffer, so a
   message that arrives after a newer one is gone, not delivered late. JSON streams whose
   DataSetMessages carry no sequence numbers get no dedup at all (`MessageId`-based dedup is

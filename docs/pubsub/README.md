@@ -44,7 +44,8 @@ The headline capabilities, at a glance:
 | [NetworkMessage chunking](limitations-and-interop.md#chunking-and-message-size) (splitting oversized messages) | Partial — inbound chunked messages are reassembled, but Milo never emits chunks: a configured `maxNetworkMessageSize` is enforced, not chunked, and an oversized message is skipped with a `Bad_EncodingLimitsExceeded` diagnostics error |
 | UADP [`RawData` field encoding and PromotedFields](limitations-and-interop.md#rawdata-and-promoted-fields) | Not yet — rejected with `Bad_NotSupported` at startup, reconfigure, and activation |
 | Ethernet, AMQP, and MQTT-over-WebSocket [transports](limitations-and-interop.md#transports) | Not yet — rejected at config build or connection open |
-| Remote configuration over OPC UA | Not yet — the standard PubSub method nodes (ns0) return `Bad_NotImplemented` ([details](limitations-and-interop.md#server-integration-limits)) |
+| [Remote configuration over OPC UA](server-integration.md#remote-configuration) | Works (opt-in) — `allowRemoteConfiguration(true)` backs the ns0 PubSubConfiguration file model (Open/Read/Write/CloseAndUpdate, ReserveIds) plus Enable/Disable; the deprecated imperative methods (`AddConnection`, ...) stay `Bad_NotImplemented` |
+| [Diagnostics and status events](server-integration.md#diagnostics-and-status-events) | Works (opt-in) — `diagnosticsEnabled` backs the ns0 diagnostics tree and capabilities; `statusEventsEnabled` bridges state changes and communication failures to OPC UA events |
 | `ServerPubSub` over MQTT | Not yet — UDP/UADP only; rejected with `Bad_ConfigurationError` |
 
 A distinction that matters beyond this table: some unsupported configuration is rejected with a

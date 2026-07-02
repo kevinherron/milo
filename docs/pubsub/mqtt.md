@@ -133,7 +133,7 @@ The metadata's ConfigurationVersion is auto-populated by the config builders (it
 
 Settings on a DataSetWriter or DataSetReader override settings on the WriterGroup. The defaults match what the examples produce: data published QoS 0 not retained, metadata QoS 1 retained.
 
-One caveat: a writer-level `requestedDeliveryGuarantee` *without* a writer-level `queueName` override is silently inert for data messages. Writers without a queue override share the group's NetworkMessage partition, and that shared partition publishes at the group-resolved QoS. Give the writer its own `queueName` if you need per-writer QoS.
+One caveat: a writer-level `requestedDeliveryGuarantee` override is only valid alongside a writer-level `queueName` override — a writer without its own queue shares the group's NetworkMessage partition and cannot demand a different QoS on it (Part 14 §6.4.2.5.4). A QoS override without a queue name is now rejected at `build()` with a `PubSubConfigValidationException` naming the writer, rather than silently ignored. Give the writer its own `queueName` if you need per-writer QoS.
 
 ## Client identity and connection properties
 
@@ -155,12 +155,12 @@ Connection-level knobs are set as properties on the MQTT connection builder, e.g
 
 The transport reconnects automatically and re-issues every subscription on reconnect; recovery across a full broker restart (data resumes, readers stay usable) is verified by test. The backoff schedule is the HiveMQ client default — 1 s initial, doubling per attempt, capped at 120 s, with jitter — and is not configurable.
 
-Be aware of what an outage does *not* do: PubSub component state does not change while the broker is down. Writers and readers stay Operational and no state-change events fire, so applications cannot observe a broker outage through state listeners. What you get instead:
+A broker outage now moves PubSub state, on both ends. A disconnect drives the affected connection to `Error` (`Bad_ConnectionClosed`), which cascades its writer and reader groups to `Paused` and stops publishing; a reconnect recovers the connection to `Operational`, re-issues subscriptions, re-activates the children, and republishes each writer's retained metadata. This is the R16 transport-state mapping, and it means a broker outage is observable through `PubSubStateListener` (and, on the server module, through status events) — not only through send diagnostics. What still holds during the outage:
 
-- Publisher side: each failed publish surfaces as a diagnostics error (`Bad_CommunicationError`). Publishes fail fast with `Bad_ServerNotConnected` while disconnected, so QoS 1/2 messages are not buffered and replayed after reconnect — data published during an outage is lost.
-- Subscriber side: opt in to the `messageReceiveTimeout` watchdog on `DataSetReaderConfig` (default off). The reader then goes to Error/`Bad_Timeout` after the configured silence and returns to Operational on the next message it accepts — an indirect but observable outage signal. Sequence tracking applies here: a message dropped as a stale duplicate (a QoS 1 redelivery, for example) neither resets the watchdog nor recovers the reader; see [operations](operations.md).
+- Publisher side: each failed publish surfaces as a diagnostics error carrying the real status (`Bad_ServerNotConnected` while disconnected — no longer flattened to `Bad_CommunicationError`). Publishes fail fast, so QoS 1/2 messages are not buffered and replayed after reconnect — data published during an outage is lost.
+- Subscriber side: a stalled *publisher* (broker up, publisher silent) is not a transport disconnect, so the connection stays `Operational`; opt in to the `messageReceiveTimeout` watchdog on `DataSetReaderConfig` (default off) to catch it. The reader then goes to Error/`Bad_Timeout` after the configured silence and returns to Operational on the next message it accepts. Sequence tracking applies here: a message dropped as a stale duplicate (a QoS 1 redelivery, for example) neither resets the watchdog nor recovers the reader; see [operations](operations.md).
 
-Retained metadata is not re-published on reconnect; the broker's retained copy already covers late and reconnecting subscribers.
+Retained metadata *is* republished on reconnect (a side effect of re-activating the writers), on top of the copy the broker already retained; late and reconnecting subscribers are covered either way.
 
 ## TLS and authentication
 

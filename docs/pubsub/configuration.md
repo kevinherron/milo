@@ -87,8 +87,10 @@ At build time, `build()` — and the `UdpDatagramAddress` factories — throw
 catches structural problems: a blank name (`"writer group: name must not be blank"`), a missing UDP
 address, a missing or zero `writerGroupId` or `dataSetWriterId`, a non-positive
 `publishingInterval`, a zero or negative `keepAliveTime`, an out-of-range port or blank host on a
-`UdpDatagramAddress`, and `Json*` message settings anywhere on a UDP connection (`"... uses JSON
-message settings, which are not valid on a UDP connection"`).
+`UdpDatagramAddress`, `Json*` message settings anywhere on a UDP connection (`"... uses JSON
+message settings, which are not valid on a UDP connection"`), and a writer-level
+`requestedDeliveryGuarantee` override without a writer-level `queueName` (`"... requires a
+writer-level queueName override"`, Part 14 §6.4.2.5.4).
 
 At startup time, `PubSubService.startup()` fails (the returned future completes exceptionally) with
 a `UaException` for problems that span the config and its environment. `Bad_ConfigurationError`
@@ -477,6 +479,13 @@ One deliberate one-way drop: `BrokerSecurityConfig` (TLS material and broker cre
 serialized by `toDataType` and comes back as defaults from `fromDataType`. Credentials and key
 paths do not belong in a Part 14 configuration document.
 
+To persist a configuration as a file, `PubSubConfigFiles.write(dataType, context)` and
+`PubSubConfigFiles.read(bytes, context)` (also in `org.eclipse.milo.opcua.sdk.pubsub.config`) wrap
+a `PubSubConfiguration2DataType` as the Part 14 `.uabinary` document — a `UABinaryFileDataType`
+with a Table 88 namespace header. That is both the on-disk convention and the buffer format the
+server module's remote `CloseAndUpdate` reads. The body's NodeIds are written with the context's
+namespace indices, so `read` with a context whose `NamespaceTable` matches the one used to `write`.
+
 ## Knobs that exist but are inert or rejected today
 
 The config model carries the full Part 14 vocabulary so configs can round-trip, which means it can
@@ -489,7 +498,7 @@ into one of two camps: rejected (you get an error) or inert (silently ignored). 
 | UADP `PromotedFields` network-message mask bit / `RawData` field-content mask bit | Rejected. `startup()` and reconfigure fail with `Bad_NotSupported` for enabled UADP-mapped groups and writers; components enabled later fail into Error at activation. Disabled components are tolerated for round-trip; JSON `RawData` is implemented; custom `"uadp"` providers are exempt. |
 | UADP timing offsets (`SamplingOffset`, `PublishingOffset`, `ReceiveOffset`, `ProcessingOffset`) | Inert. No typed config fields exist; imported values are preserved in `rawMessageSettings` and never consulted by the publish or receive paths. |
 | `BrokerTransportSettings.resourceUri` / `authenticationProfileUri` | Inert. Round-trip only; never read by the runtime. |
-| Writer-level `BrokerTransportSettings` QoS without a `queueName` override | Inert for data messages — the writer stays in the group's shared partition. Writer QoS is honored when combined with a queue override. |
+| Writer-level `BrokerTransportSettings` `requestedDeliveryGuarantee` without a `queueName` override | Rejected. `build()` throws `PubSubConfigValidationException` — a writer cannot demand a different QoS on the group's shared partition (Part 14 §6.4.2.5.4). Writer QoS is honored only when combined with a writer-level queue override; the default `NotSpecified` guarantee is unaffected. |
 
 Former entries that have graduated out of this list: `DataSetWriterConfig.keyFrameCount` is
 honored now (see [key frames and delta frames](#key-frames-and-delta-frames-keyframecount)),

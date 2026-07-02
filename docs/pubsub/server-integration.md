@@ -22,8 +22,9 @@ to the address space for you:
 - a published dataset whose fields all point at nodes is fed automatically from live node values
   (the auto-source) — no source code to write;
 - a reader configured with TargetVariables writes received field values into variable nodes;
-- optionally, the PubSub configuration and live component states are exposed as a read-only
-  information model under the server's ns0 `PublishSubscribe` object.
+- optionally, the PubSub configuration and live component states are exposed as an information
+  model under the server's ns0 `PublishSubscribe` object — read-only by default, but with opt-in
+  remote configuration (the Part 14 file model), a diagnostics tree, and status events.
 
 One honest limit before you design around this module: `ServerPubSub` builds its runtime
 configuration internally and has no hook to register transport providers, so it is UDP/UADP only
@@ -355,18 +356,113 @@ and published datasets, with their addresses, message settings, and properties.
 
 What you get, and the edges:
 
-- The tree is read-only and method-free. It is built from the configuration at startup;
-  reconfiguring through `runtime()` afterwards does not rebuild the config-derived nodes.
+- The config-derived nodes are read-only by default. The tree is rebuilt incrementally when you
+  reconfigure through `ServerPubSub.reconfigure(...)` (the info-model-aware reconfigure path added
+  in this version) or when an authorized client applies a remote CloseAndUpdate — affected
+  connections and datasets are torn down and rebuilt, untouched subtrees are left alone. A bare
+  `runtime().reconfigure(...)` still bypasses the model, so use `ServerPubSub.reconfigure(...)`
+  when you want the browse tree to keep up.
 - Per-component `Status/State` variables are live — they track the runtime state machine, so a
   browsing client sees readers go `Operational` and components go `Disabled` as it happens.
 - `SupportedTransportProfiles` advertises the UDP-UADP profile only, matching what the server
   integration actually runs.
-- The ns0 configuration method nodes (`AddConnection`, `RemoveConnection`, the SKS — Security Key
-  Service — management methods) are left unbacked; a client calling them gets
-  `Bad_NotImplemented`. The exception is `GetSecurityKeys`, which is backed when the opt-in SKS
-  server face is enabled (`ServerPubSubOptions.sksServerEnabled(true)`; it requires a
-  SignAndEncrypt channel and enforces per-SecurityGroup RolePermissions — see
-  [limitations: message security and SKS](limitations-and-interop.md#message-security-and-sks)).
+- The ns0 method nodes are backed only when you opt in. `Enable`/`Disable` on the per-component
+  Status objects come alive when both `exposeInformationModel(true)` and
+  `allowRemoteConfiguration(true)` are set; the `PubSubConfiguration` file methods come alive with
+  `allowRemoteConfiguration(true)` (below); the per-component diagnostics tree and `Reset` come
+  alive with `diagnosticsEnabled(true)`; and `GetSecurityKeys` comes alive with
+  `sksServerEnabled(true)`. The deprecated imperative methods (`AddConnection`, `RemoveConnection`,
+  the SKS management methods) are never backed and return `Bad_NotImplemented`.
+
+## Remote configuration
+
+By default everything above is read-only. Set
+`ServerPubSubOptions.builder().allowRemoteConfiguration(true)` and `ServerPubSub` backs the
+standard Part 14 §9.1.3.7 configuration file — the ns0 `PubSubConfiguration` FileType object
+(`i=25451`) under `PublishSubscribe` — so an authorized client can read the running configuration,
+edit it, and apply the result atomically. This is the modern, file-based configuration interface;
+Milo does not implement the older imperative methods (`AddConnection` and friends), which stay
+unbacked and return `Bad_NotImplemented`.
+
+The file behaves like any OPC UA FileType. A client `Open`s it (read, or read-write), `Read`s or
+`Write`s bytes, moves the cursor with `GetPosition`/`SetPosition`, and `Close`s it. The bytes are a
+`.uabinary` document — a `UABinaryFileDataType` wrapping a `PubSubConfiguration2DataType` — for
+which `milo-sdk-pubsub` ships a codec, `PubSubConfigFiles.read`/`write`, that you can also use to
+persist a config to disk. A read snapshot is materialized at `Open` and carries a
+`ConfigurationVersion` (a VersionTime) that a client is expected to compare before writing back,
+per the spec's read-modify-write flow.
+
+Applying a change is `CloseAndUpdate`, and it is element-oriented rather than whole-file. The client
+passes a list of ConfigurationReferences — each naming one element (a connection, group, writer,
+reader, dataset, or SecurityGroup) and one operation: Add, Match, Add+Match, Modify, or Remove —
+with the element bodies supplied in the written file. The applier works them against the live
+configuration: Removes first, parents before children; an Add auto-assigns a name, PublisherId,
+WriterGroupId, or DataSetWriterId when the client leaves them blank. The `requireCompleteUpdate`
+argument picks the failure mode — `true` is atomic (apply only if every reference succeeded),
+`false` applies the survivors. Either way the change lands as one `reconfigure(DISABLE_AFFECTED)` of
+the running engine (affected components bounce through the state machine visibly, untouched ones
+keep running), and the method returns a per-reference status array plus the NodeIds of the objects
+it created or matched. The whole-config validity checks — id uniqueness, PublisherId presence, the
+delta-frame/RawData/security rules — run at that reconfigure step: a config that fails them surfaces
+as the method status with the live configuration left unchanged, even in partial mode.
+
+`ReserveIds` supports a client that wants ids assigned before it writes the file. It reserves a
+block of WriterGroupIds and DataSetWriterIds (and hands back a DefaultPublisherId typed for the
+transport profile) that stay reserved for the life of the session and are consumed when they reach
+the applied config. Auto-assignment and `ReserveIds` both draw from the `0x8000`-`0xFFFF` range and
+honor every session's outstanding reservations, so two clients configuring concurrently never
+collide.
+
+Authorization runs on every handler. Each requires a session — a session-less internal call is
+`Bad_UserAccessDenied` — and consults `PubSubMethodAuthorizer.checkConfigure`; references that touch
+a SecurityGroup additionally consult `checkSksAdmin`. The default authorizer allows when no
+`RoleMapper` is configured (the surface is opt-in to begin with) and enforces the well-known
+`ConfigureAdmin` / `SecurityKeyServerAdmin` roles when one is; supply your own with
+`ServerPubSubOptions.builder().methodAuthorizer(...)`. A successful `CloseAndUpdate` persists the new
+configuration through the configured `PubSubConfigurationStore` (below); a save failure is logged
+and retried on the next mutation, and never undoes the applied change. Editing a SecurityGroup's
+`SecurityPolicyUri` or `KeyLifetime` this way also invalidates that group's live keys, forcing a
+fresh SKS fetch (§6.2.12.2).
+
+Enable and Disable are the other writable surface, and they live on the information model rather than
+the file. When both `allowRemoteConfiguration(true)` and `exposeInformationModel(true)` are set, the
+`Enable`/`Disable` methods on each component's Status object are backed: they enforce the §9.1.10
+current-state rules (`Enable` requires the component `Disabled`, `Disable` requires it not
+`Disabled`, else `Bad_InvalidState`), consult `checkConfigure`, and — unlike a `CloseAndUpdate` — do
+not persist, because enabling or disabling a component is not a configuration mutation.
+
+What is not implemented, all returning `Bad_NotImplemented`: the deprecated imperative methods
+(`AddConnection`, `RemoveConnection`, and the rest), the dataset-binding methods (they mutate
+owner-supplied source and target bindings), key push (`SetSecurityKeys`), and the SecurityGroup
+management methods (`AddSecurityGroup` and friends).
+
+## Diagnostics and status events
+
+Two further opt-ins expose the runtime's health, both off by default.
+
+`diagnosticsEnabled(true)` — which also needs `exposeInformationModel(true)`, since the nodes hang
+off the component tree — backs the Part 14 diagnostics model. The ns0 `PublishSubscribe/Diagnostics`
+root (`i=17409`) gets its `DiagnosticsLevel` (Basic, read-only) and service-level counts, and each
+component in the exposed tree gains a `Diagnostics` object: a `Counters` folder holding that
+component's counters (messages sent and received, failed transmissions, decode and decryption
+errors, the six state-transition counters), a `TotalInformation`/`TotalError` roll-up, and a `Reset`
+method that zeroes the engine counters for that path (guarded by `checkConfigure`). Values are read
+live off `runtime().diagnostics()` and clamped to UInt32 at the wire, with the SourceTimestamp
+advancing at the cap so a saturated counter still looks alive. `ResolvedAddress` on a connection is a
+documented approximation — the configured URL, with UDP hostnames resolved at read time — not the
+transport's actual peer address. Alongside the diagnostics tree, `PubSubCapabilities` (`i=23678`) is
+filled in: every `Max*` limit reads 0 (no fixed cap — Milo imposes none), `SupportSecurityKeyPull`
+is true, `SupportSecurityKeyPush` is false, and `SupportSecurityKeyServer` follows `sksServerEnabled`.
+
+`statusEventsEnabled(true)` is independent of the information model — the events fire on the Server
+Object's event notifier, so a client subscribed to Events there receives them whether or not the
+PubSub nodes exist. State changes become `PubSubStatusEventType` events (`i=15535`) and send failures
+become `PubSubCommunicationFailureEventType` events (`i=15563`, carrying the real un-flattened status
+code). Severities follow the Part 14 bands: informational (100) for ordinary transitions, Error (500)
+for an entry into `Error` and for every communication failure. A communication failure is reported at
+most once per failure episode per component and re-armed when the component next recovers to
+`Operational`, so a broker that stays down does not flood the event stream; teardown transitions
+during shutdown produce nothing.
 
 ## Persisting configuration
 
@@ -385,9 +481,10 @@ public interface PubSubConfigurationStore {
 The semantics at attach are load-wins, save-once: if `load()` returns a non-null configuration,
 it wins and the config passed to `attach` is ignored; if `load()` returns null, the attach config
 is used and saved exactly once via `save()`. A `save` failure is logged and non-fatal; a `load`
-failure propagates out of `attach`. Configuration changes made later through `runtime()` are
-**not** saved automatically in this version — if you reconfigure at runtime and want it
-persisted, call your store yourself.
+failure propagates out of `attach`. Once running, a successful remote `CloseAndUpdate` (above)
+saves the new configuration automatically. Changes you make yourself through `runtime()` are
+**not** saved — if you reconfigure a running service in code and want it persisted, call your store
+yourself.
 
 ## What the server integration does not do
 
@@ -400,13 +497,11 @@ them:
   connection ..."); a disabled MQTT connection passes startup but is rejected with the same
   status if you later enable it. For PubSub over MQTT, use the standalone `PubSubService` with
   `MqttTransportProvider` registered — and bridge to the address space yourself if needed.
-- **Remote configuration.** `ServerPubSubOptions.allowRemoteConfiguration(true)` throws
-  `UnsupportedOperationException` at `attach` — the Part 14 configuration methods
-  (`AddConnection` and friends) are not implemented. Clients that call the unbacked ns0 method
-  nodes get `Bad_NotImplemented`.
-- **`diagnosticsEnabled`.** Currently inert: the option is stored but nothing reads it. Setting
-  it neither fails nor does anything. Engine diagnostics counters are still available through
-  `runtime().diagnostics()`.
+- **Deprecated imperative configuration methods.** The file model in
+  [Remote configuration](#remote-configuration) is the supported way to reconfigure over OPC UA.
+  The older imperative ns0 methods — `AddConnection`, `RemoveConnection`, the dataset-binding
+  methods, the SecurityGroup management methods, and key push (`SetSecurityKeys`) — are not
+  implemented and return `Bad_NotImplemented`, whether or not remote configuration is enabled.
 - **Standalone SubscribedDataSet references.** A reader whose SubscribedDataSet is a
   `StandaloneSubscribedDataSetRef` carrying TargetVariables gets no automatic writes: attach
   succeeds, the targets are still validated, a WARN is logged, and nothing is written at runtime.
