@@ -433,6 +433,8 @@ public class OpcUaServer extends AbstractServiceHandler {
             });
     transports.clear();
 
+    conditionManager.shutdown();
+
     sessionManager.shutdown();
 
     serverNamespace.shutdown();
