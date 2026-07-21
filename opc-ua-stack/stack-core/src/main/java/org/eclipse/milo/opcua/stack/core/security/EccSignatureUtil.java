@@ -46,6 +46,8 @@ public final class EccSignatureUtil {
   public static final int ED25519_SIGNATURE_LENGTH = 64;
   public static final int ED448_SIGNATURE_LENGTH = 114;
 
+  private static final byte[] EMPTY_MESSAGE = new byte[0];
+
   private static final SecurityProviderResolver PROVIDER_RESOLVER =
       SecurityProviderResolver.create();
 
@@ -356,9 +358,7 @@ public final class EccSignatureUtil {
 
       signature.initSign(privateKey);
 
-      for (ByteBuffer buffer : buffers) {
-        signature.update(buffer);
-      }
+      update(signature, buffers);
 
       return signature.sign();
     } catch (GeneralSecurityException e) {
@@ -394,9 +394,7 @@ public final class EccSignatureUtil {
 
       signature.initVerify(publicKey);
 
-      for (ByteBuffer buffer : buffers) {
-        signature.update(buffer);
-      }
+      update(signature, buffers);
 
       if (!signature.verify(signatureBytes)) {
         throw new UaException(StatusCodes.Bad_SecurityChecksFailed, "could not verify signature");
@@ -411,5 +409,25 @@ public final class EccSignatureUtil {
       case BOUNCY_CASTLE -> digestName + "WITHPLAIN-ECDSA";
       case JDK -> digestName + "withECDSAinP1363Format";
     };
+  }
+
+  private static void update(Signature signature, ByteBuffer... buffers)
+      throws GeneralSecurityException {
+
+    if (buffers.length == 0) {
+      signature.update(EMPTY_MESSAGE);
+      return;
+    }
+
+    for (ByteBuffer buffer : buffers) {
+      if (buffer.hasRemaining()) {
+        signature.update(buffer);
+      } else {
+        // SunEC's EdDSA verifier on Java 17 does not initialize an empty message when
+        // Signature.update(ByteBuffer) receives a buffer with no remaining bytes. The byte-array
+        // overload performs the required zero-length update.
+        signature.update(EMPTY_MESSAGE);
+      }
+    }
   }
 }

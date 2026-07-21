@@ -4,9 +4,9 @@ The legacy type-instantiation subsystem — `NodeFactory`, `InstanceDeclarationH
 `NodeFactory.InstantiationCallback`, `EventFactory`, and
 `ManagedAddressSpace.getNodeFactory()` — is deprecated, replaced by the
 `org.eclipse.milo.opcua.sdk.server.nodes.instantiation` package. The legacy
-implementation is retained with frozen behavior for the deprecation period; its removal
-is a future major-version decision. This guide maps every legacy usage pattern to the
-new API and lists every behavior that changes when you move.
+implementation is retained for the deprecation period and may receive correctness fixes required by
+SDK features; its removal is a future major-version decision. This guide maps every legacy usage
+pattern to the new API and lists every behavior that changes when you move.
 
 The new package ships as **experimental** for one minor release: the API may adjust
 based on in-tree migrations and placeholder validation against real companion-spec
@@ -406,9 +406,8 @@ it yourself; leave it unset for anything that becomes part of the address space.
 
 ## Changed Behavior
 
-Moving to the new API is an opt-in behavior change. The legacy implementation keeps its
-frozen behavior — including the defects below, which are documented in its deprecation
-Javadoc rather than fixed. The differences you can observe:
+Moving to the new API is an opt-in behavior change. The legacy implementation remains available
+during the deprecation period, but the new API defines stronger contracts for the differences below:
 
 **Optional-Method selection.** Legacy created optional Methods unconditionally;
 `includeOptionalNode` was never consulted for them. The new engine selects optional
@@ -443,12 +442,11 @@ then commits nodes and references as one journaled batch; `bindMethod` binders r
 after commit. Nothing is observable in the target until commit, and `afterCommit`
 observers see only fully committed results.
 
-**Reference reconstruction.** Non-hierarchical declaration references are re-mapped
-among instantiated members (internal) or copied verbatim (external) under a named
-policy, `ReferenceReplicationPolicy`, and land exactly once in each observable
-direction, with no edges to omitted targets. Legacy behavior — a full-list scan with
-order-dependent quirks — left inverse-only rows and edges to nodes that were never
-created reachable in some shapes.
+**Reference reconstruction.** Both engines re-map non-hierarchical declaration references among
+instantiated members (internal) and copy external targets. The new engine makes that behavior
+explicit through the named `ReferenceReplicationPolicy` and commits de-duplicated reference rows as
+part of its staged graph. The legacy engine reconstructs references from cached declaration tables
+during incremental publication.
 
 **Error shapes.** Legacy failures surfaced as generic `UaException`s, or as
 `ClassCastException` after nodes were stored, with partial instance trees left behind.
@@ -459,13 +457,9 @@ exactly its journaled additions. The two documented exceptions: a failed rollbac
 reported loudly with `ROLLBACK_FAILED` diagnostics carrying what could not be removed,
 and mutations a hook made to reused/shared nodes are not this instantiation's to undo.
 
-**Cleanup ownership.** Legacy offered no cleanup; callers deleted recursively from the
-root and — because excluding an optional member still created and stored its mandatory
-descendants, unreachable from the instance root — orphans could survive anyway. The new
-result is ownership-explicit: `materializedNodes()` distinguishes CREATED from REUSED,
-and `deleteCreated()` removes exactly what the instantiation created. The
-excluded-subtree defect does not exist in the new engine: exclusion prunes the subtree
-at plan time.
+**Cleanup ownership.** Legacy offered no ownership-explicit cleanup; callers deleted recursively
+from the root. The new result is ownership-explicit: `materializedNodes()` distinguishes CREATED
+from REUSED, and `deleteCreated()` removes exactly what the instantiation created.
 
 Two further legacy defects fixed (not just changed) in the new engine, for
 completeness: a member typed as a subtype of its declaring type now receives that
@@ -481,4 +475,4 @@ one minor release. The API may adjust — in particular the `BrowsePath` represe
 (namespace-index-based today, resolved against the model snapshot's namespace table)
 and the placeholder surface (`forPlaceholder`, `expandPlaceholder`), which is being
 validated against real companion-specification workloads — then freezes. The legacy
-subsystem remains available, unchanged, for the whole deprecation period.
+subsystem remains available for the whole deprecation period.

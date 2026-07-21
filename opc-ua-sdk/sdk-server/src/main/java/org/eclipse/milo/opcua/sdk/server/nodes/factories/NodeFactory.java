@@ -42,14 +42,12 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 
 /**
- * Legacy type-instantiation factory, retained with frozen behavior for compatibility.
+ * Legacy type-instantiation factory, retained for compatibility while callers migrate.
  *
- * <p>Known limitations, kept as-is rather than fixed (each is a documented behavior of this
- * implementation; the replacement corrects all of them):
+ * <p>Known limitations (each is a documented behavior of this implementation; the replacement
+ * corrects all of them):
  *
  * <ul>
- *   <li>Excluding an optional member still creates and stores its mandatory descendants,
- *       unreachable from the instance root.
  *   <li>A member typed as a subtype of its declaring type is instantiated without the
  *       supertype-declared mandatory members of that subtype.
  *   <li>When a type declares a child with the same BrowseName as an on-declaration override, the

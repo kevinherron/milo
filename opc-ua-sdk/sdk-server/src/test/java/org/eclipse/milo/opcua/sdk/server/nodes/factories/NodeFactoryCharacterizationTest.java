@@ -71,14 +71,12 @@ import org.mockito.stubbing.Answer;
  * InstanceDeclarationHierarchy} exactly as shipped, before the replacement node-instantiation
  * engine lands.
  *
- * <p>These tests are the fixture required by the replacement design's "legacy untouched" guarantee:
- * they assert what the legacy code <em>actually does today</em>, including behavior the design
- * catalogs as defective (orphaned mandatory descendants of excluded optionals, shallow nested-type
- * expansion, backwards declaration-vs-type precedence, unconditional optional Methods, silent
- * collision replacement, the child NodeId formula's ambiguities). A test failure here means legacy
- * behavior drifted. Any deliberate, reviewed legacy fix must update this fixture in the same commit
- * — that is the audit trail the replacement design requires. Do not "fix" a failing assertion by
- * changing it to the spec-correct expectation.
+ * <p>These tests assert what the legacy code <em>actually does today</em>, including behavior the
+ * replacement design catalogs as defective (shallow nested-type expansion, backwards
+ * declaration-vs-type precedence, unconditional optional Methods, silent collision replacement, the
+ * child NodeId formula's ambiguities). A test failure here means legacy behavior drifted. Any
+ * deliberate, reviewed legacy fix must update this fixture in the same commit so the change has an
+ * audit trail.
  *
  * <p><b>Nondeterminism:</b> node publication order — the order nodes are added to the {@link
  * NodeManager} — follows {@code HashMap} iteration order in {@code NodeFactory.createNodeTree} and
@@ -347,14 +345,9 @@ public class NodeFactoryCharacterizationTest {
     assertEquals(NodeIds.BaseDataVariableType, call.typeDefinitionId());
   }
 
-  /**
-   * Pinned as shipped: excluding an Optional member prevents only that node's creation. Its
-   * Mandatory descendants are still created and stored — unreachable, with no hierarchical
-   * reference connecting them to anything — and their callbacks fire with {@code parent == null},
-   * indistinguishable from the root signal.
-   */
+  /** Excluding an Optional member also prunes all of its descendants. */
   @Test
-  public void excludedOptionalStillCreatesMandatoryDescendants() throws Exception {
+  public void excludedOptionalPrunesMandatoryDescendants() throws Exception {
     UaObjectTypeNode typeNode = addObjectType("D1Type", NodeIds.BaseObjectType);
     UaObjectNode optObj =
         addObjectDeclaration(
@@ -368,33 +361,17 @@ public class NodeFactoryCharacterizationTest {
     UaNode root = nodeFactory.createNode(rootNodeId, typeNode.getNodeId(), recorder);
 
     NodeId optObjId = new NodeId(1, testPrefix + ":D1Root/1:OptObj");
-    NodeId orphanId = new NodeId(1, testPrefix + ":D1Root/1:OptObj/1:M");
+    NodeId descendantId = new NodeId(1, testPrefix + ":D1Root/1:OptObj/1:M");
 
     assertFalse(nodeManager.containsNode(optObjId), "excluded optional itself is not created");
-    assertTrue(
-        nodeManager.containsNode(orphanId),
-        "the excluded optional's mandatory descendant IS created and stored");
-
-    // The orphan has no hierarchical reference linking it to a parent: only its
-    // HasTypeDefinition reference was wired (HasModellingRule is skipped, and the
-    // HasComponent row's source — the excluded optional — was never created).
-    List<Reference> orphanReferences = nodeManager.getReferences(orphanId);
-    assertTrue(
-        orphanReferences.stream()
-            .anyMatch(
-                r -> r.isForward() && NodeIds.HasTypeDefinition.equals(r.getReferenceTypeId())));
-    assertTrue(
-        orphanReferences.stream()
-            .noneMatch(r -> NodeIds.HasComponent.equals(r.getReferenceTypeId())),
-        "orphan is unreachable: no hierarchical reference at all");
-
-    // Its callback fired with parent == null — the documented "this is the root" signal.
-    assertTrue(
+    assertFalse(
+        nodeManager.containsNode(descendantId),
+        "the excluded optional's descendants are not created");
+    assertFalse(
         recorder.variableEvents.stream()
-            .anyMatch(e -> e.parent() == null && e.instance().getNodeId().equals(orphanId)),
-        "orphan callback fired with parent == null");
+            .anyMatch(e -> e.instance().getNodeId().equals(descendantId)),
+        "callbacks do not fire for descendants of excluded optionals");
 
-    // And the actual root also fired with parent == null; the two are indistinguishable.
     assertTrue(
         recorder.objectEvents.stream().anyMatch(e -> e.parent() == null && e.instance() == root));
   }
@@ -783,13 +760,11 @@ public class NodeFactoryCharacterizationTest {
   }
 
   /**
-   * Pinned as shipped: {@code HasModellingRule} references are excluded from instances; every other
-   * declaration reference row is wired verbatim — absolute targets as-is, so non-hierarchical
-   * references between declarations point at the <em>type's</em> declaration nodes, and inverse
-   * rows are re-emitted as forward references (direction is not preserved).
+   * {@code HasModellingRule} references are excluded from instances; non-hierarchical references
+   * between declarations are remapped to the corresponding instances with direction preserved.
    */
   @Test
-  public void modellingRuleExcludedOtherReferencesWiredVerbatim() throws Exception {
+  public void modellingRuleExcludedAndInternalReferencesRemappedToInstances() throws Exception {
     UaObjectTypeNode typeNode = addObjectType("RefType", NodeIds.BaseObjectType);
     UaObjectNode fooDecl =
         addObjectDeclaration(
@@ -817,8 +792,7 @@ public class NodeFactoryCharacterizationTest {
           "HasModellingRule excluded from instance " + id);
     }
 
-    // Foo instance points at the *declaration* Bar (absolute target verbatim), not at the
-    // sibling instance.
+    // Foo instance points at the sibling Bar instance, not the declaration.
     List<Reference> fooReferences = nodeManager.getReferences(fooInstanceId);
     assertTrue(
         fooReferences.stream()
@@ -826,26 +800,25 @@ public class NodeFactoryCharacterizationTest {
                 r ->
                     r.isForward()
                         && NodeIds.HasCause.equals(r.getReferenceTypeId())
-                        && r.getTargetNodeId().equals(barDecl.getNodeId().expanded())),
-        "non-hierarchical reference wired verbatim to the type's declaration node");
+                        && r.getTargetNodeId().equals(barInstanceId.expanded())),
+        "non-hierarchical reference remapped to the sibling instance");
     assertTrue(
         fooReferences.stream()
             .noneMatch(
                 r ->
                     NodeIds.HasCause.equals(r.getReferenceTypeId())
-                        && r.getTargetNodeId().equals(barInstanceId.expanded())),
-        "it is NOT re-mapped onto the sibling instance");
+                        && r.getTargetNodeId().equals(barDecl.getNodeId().expanded())),
+        "reference does not point back into the type declaration");
 
-    // The auto-added inverse row on the Bar declaration is re-emitted as a *forward* reference
-    // on the Bar instance: direction is not preserved.
+    // The auto-added inverse row on the Bar declaration stays inverse and targets Foo's instance.
     assertTrue(
         nodeManager.getReferences(barInstanceId).stream()
             .anyMatch(
                 r ->
-                    r.isForward()
+                    !r.isForward()
                         && NodeIds.HasCause.equals(r.getReferenceTypeId())
-                        && r.getTargetNodeId().equals(fooDecl.getNodeId().expanded())),
-        "inverse declaration row forced forward on the instance");
+                        && r.getTargetNodeId().equals(fooInstanceId.expanded())),
+        "inverse declaration reference direction and instance target preserved");
   }
 
   private NodeId newNodeId(String id) {

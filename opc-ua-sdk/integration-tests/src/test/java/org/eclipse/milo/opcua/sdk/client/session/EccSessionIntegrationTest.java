@@ -596,10 +596,10 @@ class EccSessionIntegrationTest {
     }
   }
 
-  // None endpoints using enhanced username-token encryption must advertise a certificate for the
-  // signed receiver key; otherwise the client cannot anchor the password encryption target.
+  // Part 4 (7.41) forbids enhanced username-token encryption over a None SecureChannel because the
+  // channel cannot negotiate the ephemeral key material required to protect the password.
   @Test
-  void noneEndpointWithEccUsernameTokenRequiresCertificate() throws Exception {
+  void rejectsEnhancedUsernameTokenOverNoneChannel() throws Exception {
     SecurityPolicy tokenPolicy = SecurityPolicy.ECC_nistP256_AesGcm;
 
     try (RunningServer running = startNoneEndpointWithoutCertificate(tokenPolicy)) {
@@ -618,7 +618,7 @@ class EccSessionIntegrationTest {
       try {
         UaException exception = assertThrows(UaException.class, client::connect);
 
-        assertEquals(StatusCodes.Bad_ConfigurationError, exception.getStatusCode().getValue());
+        assertEquals(StatusCodes.Bad_SecurityPolicyRejected, exception.getStatusCode().getValue());
       } finally {
         disconnectQuietly(client);
       }
@@ -732,10 +732,9 @@ class EccSessionIntegrationTest {
     }
   }
 
-  // An enhanced (ECC/RSA-DH) certificate user-token policy advertised over a legacy secured channel
-  // is unsupported: there is no channel thumbprint or channel certificate to bind, and Table 101
-  // defines no reduced layout for it. The client must reject it cleanly rather than failing deep in
-  // the signature byte builder (Part 4 §6.1.8 Table 101).
+  // Part 4 (7.41) requires an explicitly specified certificate user-token policy to use the same
+  // public-key algorithm as the SecureChannel. The client must reject an ECC token policy over an
+  // RSA channel before attempting to construct the identity signature.
   @Test
   void rejectsEnhancedX509TokenOverLegacyChannel() throws Exception {
     SecurityPolicy channelPolicy = SecurityPolicy.Basic256Sha256;
@@ -771,7 +770,7 @@ class EccSessionIntegrationTest {
       try {
         UaException exception = assertThrows(UaException.class, client::connect);
 
-        assertEquals(StatusCodes.Bad_IdentityTokenInvalid, exception.getStatusCode().getValue());
+        assertEquals(StatusCodes.Bad_SecurityPolicyRejected, exception.getStatusCode().getValue());
       } finally {
         disconnectQuietly(client);
       }

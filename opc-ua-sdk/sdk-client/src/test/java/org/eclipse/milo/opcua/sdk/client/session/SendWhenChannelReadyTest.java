@@ -216,6 +216,11 @@ class SendWhenChannelReadyTest {
     }
 
     @Override
+    protected CompletableFuture<Channel> getChannel() {
+      return channelFsm.getChannel();
+    }
+
+    @Override
     public ByteString getChannelThumbprint() {
       return thumbprint.get();
     }
