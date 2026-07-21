@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import org.eclipse.milo.opcua.sdk.server.identity.IdentityValidator;
+import org.eclipse.milo.opcua.sdk.server.reverse.ReverseConnectTarget;
 import org.eclipse.milo.opcua.stack.core.channel.EncodingLimits;
 import org.eclipse.milo.opcua.stack.core.channel.SecurityKeysListener;
 import org.eclipse.milo.opcua.stack.core.security.CertificateManager;
@@ -42,6 +43,11 @@ public class OpcUaServerConfigTest {
     SecurityKeysListener securityKeysListener = keyset -> {};
     ExecutorService executor = mock(ExecutorService.class);
     ScheduledExecutorService scheduledExecutor = mock(ScheduledExecutorService.class);
+    ReverseConnectTarget reverseConnectTarget =
+        ReverseConnectTarget.builder()
+            .setClientListenerUrl("opc.tcp://localhost:4841")
+            .setEndpointUrl("opc.tcp://localhost:4840")
+            .build();
 
     OpcUaServerConfig original =
         OpcUaServerConfig.builder()
@@ -58,6 +64,7 @@ public class OpcUaServerConfigTest {
             .setSecurityKeysListener(securityKeysListener)
             .setExecutor(executor)
             .setScheduledExecutor(scheduledExecutor)
+            .addReverseConnectTarget(reverseConnectTarget)
             .build();
 
     OpcUaServerConfig copy = OpcUaServerConfig.copy(original).build();
@@ -77,5 +84,6 @@ public class OpcUaServerConfigTest {
         copy.getSecurityKeysListener().orElseThrow());
     assertSame(original.getExecutor(), copy.getExecutor());
     assertSame(original.getScheduledExecutorService(), copy.getScheduledExecutorService());
+    assertEquals(original.getReverseConnectTargets(), copy.getReverseConnectTargets());
   }
 }
