@@ -25,6 +25,7 @@ import org.eclipse.milo.opcua.stack.core.types.UaResponseMessageType;
 import org.eclipse.milo.opcua.stack.core.types.structured.PublishResponse;
 import org.eclipse.milo.opcua.stack.core.types.structured.RequestHeader;
 import org.eclipse.milo.opcua.stack.core.util.ExecutionQueue;
+import org.eclipse.milo.opcua.stack.core.util.Unit;
 import org.eclipse.milo.opcua.stack.transport.client.uasc.UascRequest;
 import org.eclipse.milo.opcua.stack.transport.client.uasc.UascResponseHandler;
 import org.slf4j.Logger;
@@ -53,6 +54,11 @@ public abstract class AbstractUascClientTransport
   }
 
   protected abstract CompletableFuture<Channel> getChannel();
+
+  @Override
+  public CompletableFuture<Unit> awaitChannelReady() {
+    return getChannel().thenApply(ignored -> Unit.VALUE);
+  }
 
   @Override
   public CompletableFuture<UaResponseMessageType> sendRequestMessage(

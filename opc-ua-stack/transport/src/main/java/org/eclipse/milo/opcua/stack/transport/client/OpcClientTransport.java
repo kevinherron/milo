@@ -39,6 +39,19 @@ public interface OpcClientTransport {
   }
 
   /**
+   * Return a future that completes when this transport's channel-dependent state is ready to use.
+   *
+   * <p>SecureChannel transports override this so callers can defer building requests whose
+   * signatures depend on the active channel. Transports without channel-bound request data are
+   * ready immediately.
+   *
+   * @return a future completed when channel-dependent state is ready.
+   */
+  default CompletableFuture<Unit> awaitChannelReady() {
+    return CompletableFuture.completedFuture(Unit.VALUE);
+  }
+
+  /**
    * Connect this transport implementation.
    *
    * @param applicationContext the {@link ClientApplicationContext} associated with this transport.

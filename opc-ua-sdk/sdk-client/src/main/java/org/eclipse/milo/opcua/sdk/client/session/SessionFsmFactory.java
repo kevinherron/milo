@@ -1801,10 +1801,10 @@ public class SessionFsmFactory {
    * <p>{@link OpcClientTransport#sendRequestMessage} awaits an in-progress reconnect internally, so
    * a channel-bound request built eagerly (e.g. an enhanced-policy ActivateSession signature over
    * {@link OpcClientTransport#getChannelThumbprint()}) could sign over the dead channel's
-   * thumbprint and be sent on the channel that replaces it. For {@link OpcTcpClientTransport} the
-   * ChannelFsm's channel future completes only after the handshake publishes the new channel's
-   * thumbprint, so awaiting it before invoking {@code requestSupplier} guarantees a fresh read.
-   * Other transports have no channel binding and build immediately.
+   * thumbprint and be sent on the channel that replaces it. {@link
+   * OpcClientTransport#awaitChannelReady()} completes only after a SecureChannel transport
+   * publishes the new channel's thumbprint, so awaiting it before invoking {@code requestSupplier}
+   * guarantees a fresh read. Transports without channel binding are ready immediately.
    *
    * @param transport the {@link OpcClientTransport} to send on.
    * @param requestSupplier supplies the request to send, invoked once the channel is ready; any
@@ -1815,19 +1815,16 @@ public class SessionFsmFactory {
   static CompletableFuture<UaResponseMessageType> sendWhenChannelReady(
       OpcClientTransport transport, Callable<UaRequestMessageType> requestSupplier) {
 
-    CompletableFuture<?> channelReady =
-        transport instanceof OpcTcpClientTransport tcpTransport
-            ? tcpTransport.getChannelFsm().getChannel()
-            : completedFuture(null);
-
-    return channelReady.thenCompose(
-        ignored -> {
-          try {
-            return transport.sendRequestMessage(requestSupplier.call());
-          } catch (Exception e) {
-            return failedFuture(e);
-          }
-        });
+    return transport
+        .awaitChannelReady()
+        .thenCompose(
+            ignored -> {
+              try {
+                return transport.sendRequestMessage(requestSupplier.call());
+              } catch (Exception e) {
+                return failedFuture(e);
+              }
+            });
   }
 
   @SuppressWarnings("Duplicates")

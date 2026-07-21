@@ -234,6 +234,7 @@ public class OpcUaServerConfigBuilder {
 
       this(
           endpoints,
+          reverseConnectTargets,
           applicationName,
           applicationUri,
           productUri,
@@ -251,6 +252,7 @@ public class OpcUaServerConfigBuilder {
 
     public OpcUaServerConfigImpl(
         Set<EndpointConfig> endpoints,
+        Set<ReverseConnectTarget> reverseConnectTargets,
         LocalizedText applicationName,
         String applicationUri,
         String productUri,
@@ -281,6 +283,47 @@ public class OpcUaServerConfigBuilder {
       this.securityKeysListener = securityKeysListener;
       this.executor = executor;
       this.scheduledExecutorService = scheduledExecutorService;
+    }
+
+    /**
+     * Source-compatibility overload for callers that configure diagnostics access but pre-date
+     * Reverse Connect target support.
+     *
+     * <p>Equivalent to the canonical constructor with {@link Set#of()} as the {@code
+     * reverseConnectTargets} set.
+     */
+    public OpcUaServerConfigImpl(
+        Set<EndpointConfig> endpoints,
+        LocalizedText applicationName,
+        String applicationUri,
+        String productUri,
+        BuildInfo buildInfo,
+        IdentityValidator identityValidator,
+        EncodingLimits encodingLimits,
+        OpcUaServerConfigLimits limits,
+        CertificateManager certificateManager,
+        RoleMapper roleMapper,
+        SessionSecurityDiagnosticsAccessMode sessionSecurityDiagnosticsAccessMode,
+        @Nullable SecurityKeysListener securityKeysListener,
+        ExecutorService executor,
+        ScheduledExecutorService scheduledExecutorService) {
+
+      this(
+          endpoints,
+          Set.of(),
+          applicationName,
+          applicationUri,
+          productUri,
+          buildInfo,
+          identityValidator,
+          encodingLimits,
+          limits,
+          certificateManager,
+          roleMapper,
+          sessionSecurityDiagnosticsAccessMode,
+          securityKeysListener,
+          executor,
+          scheduledExecutorService);
     }
 
     /**
