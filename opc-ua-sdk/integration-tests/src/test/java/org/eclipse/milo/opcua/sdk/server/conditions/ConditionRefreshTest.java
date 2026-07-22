@@ -797,7 +797,7 @@ public class ConditionRefreshTest extends AbstractClientServerTest {
     when(eventNode.getSourceNode()).thenReturn(NodeIds.Server);
     doThrow(new RuntimeException("test snapshot cleanup failure")).when(eventNode).delete();
 
-    cleanupFailingCondition.setSnapshot(new ConditionEventSnapshot(eventNode));
+    cleanupFailingCondition.setSnapshot(new ConditionEventSnapshot(eventNode, eventNode::delete));
     server.getConditionManager().register(cleanupFailingCondition);
 
     try {

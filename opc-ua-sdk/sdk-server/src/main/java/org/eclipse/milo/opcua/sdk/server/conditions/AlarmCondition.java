@@ -43,8 +43,8 @@ public class AlarmCondition extends AcknowledgeableCondition {
 
   /**
    * Optional AlarmConditionType methods with no backing state in v1 (SilenceState, SuppressedState,
-   * OutOfServiceState, LatchedState, alarm groups, the {@code *2} comment variants): their instance
-   * nodes are deleted rather than left exposed without semantics.
+   * OutOfServiceState, LatchedState, alarm groups, the {@code *2} comment variants). The builder
+   * omits these methods; this list also removes them when behavior wraps a pre-existing node.
    */
   private static final List<String> UNSUPPORTED_METHODS =
       List.of(

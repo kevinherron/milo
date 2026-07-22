@@ -54,8 +54,8 @@ import org.mockito.Mockito;
  * NULL-comment convention, and LastSeverity maintenance.
  *
  * <p>The condition node tree is built by hand against a mocked server so behavior is exercised
- * without the NodeFactory or a running server; a capturing {@link EventNotifier} records every
- * fired event.
+ * without a running server or its node-instantiation facade; a capturing {@link EventNotifier}
+ * records every fired event.
  */
 public class ConditionBehaviorTest {
 

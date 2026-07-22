@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,10 +30,12 @@ import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
+import org.eclipse.milo.opcua.stack.core.util.NonceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -318,10 +321,14 @@ public class DefaultConditionManager implements ConditionManager {
   private BaseEventTypeNode createMarkerEvent(NodeId typeDefinitionId) throws UaException {
     String name = markerName(typeDefinitionId);
 
-    // newEvent pre-populates the transient-event scaffolding (auto NodeId, EventId nonce, Time,
-    // ReceiveTime); only the marker-specific fields are set here.
-    BaseEventTypeNode event = server.newEvent(typeDefinitionId).getNode();
+    BaseEventTypeNode event =
+        server
+            .getEventInstantiator()
+            .createEvent(new NodeId(1, UUID.randomUUID()), typeDefinitionId);
 
+    event.setEventId(NonceUtil.generateNonce(16));
+    event.setTime(DateTime.now());
+    event.setReceiveTime(DateTime.NULL_VALUE);
     event.setBrowseName(new QualifiedName(1, name));
     event.setDisplayName(LocalizedText.english(name));
     event.setSourceNode(NodeIds.Server);

@@ -37,10 +37,9 @@ import org.eclipse.milo.opcua.sdk.server.model.variables.TwoStateVariableTypeNod
 import org.eclipse.milo.opcua.sdk.server.nodes.UaMethodNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNodeContext;
-import org.eclipse.milo.opcua.sdk.server.nodes.UaObjectNode;
-import org.eclipse.milo.opcua.sdk.server.nodes.factories.NodeFactory;
+import org.eclipse.milo.opcua.sdk.server.nodes.instantiation.InstantiationRequest;
+import org.eclipse.milo.opcua.sdk.server.nodes.instantiation.NodeInstantiator;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
-import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
@@ -52,7 +51,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.EUInformation;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Builds Condition instances: instantiates the typed instance node via {@link NodeFactory}
+ * Builds Condition instances: instantiates the typed instance node via {@link NodeInstantiator}
  * (including opted-in optional components), wires HasCondition from the condition source and
  * ensures the source participates in the notifier hierarchy, sets the initial state, and installs
  * method handlers on the instance's method nodes iff their backing state exists.
@@ -640,6 +639,7 @@ public class ConditionBuilder {
     optionalIncludes.add("SupportsFilteredRetain");
     if (withConfirm) {
       optionalIncludes.add("ConfirmedState");
+      optionalIncludes.add("Confirm");
     }
     if (withShelving) {
       optionalIncludes.add("ShelvingState");
@@ -679,38 +679,24 @@ public class ConditionBuilder {
       optionalIncludes.add("EngineeringUnits");
     }
 
-    var nodeFactory = new NodeFactory(context);
+    InstantiationRequest<ConditionTypeNode> request =
+        InstantiationRequest.of(ConditionTypeNode.class, typeDefinitionId)
+            .nodeId(nodeId)
+            .browseName(browseName)
+            .displayName(
+                displayName != null ? displayName : LocalizedText.english(browseName.name()))
+            .target(context.getNodeManager())
+            .includeOptionals(
+                declaration -> optionalIncludes.contains(declaration.browseName().name()))
+            .onNode(
+                (declaration, instance, parent, graph) -> {
+                  if (instance instanceof UaMethodNode methodNode) {
+                    methodNodes.put(methodNode.getBrowseName(), methodNode);
+                  }
+                })
+            .build();
 
-    UaNode instance =
-        nodeFactory.createNode(
-            nodeId,
-            typeDefinitionId,
-            new NodeFactory.InstantiationCallback() {
-              @Override
-              public boolean includeOptionalNode(
-                  NodeId typeDefinitionId, QualifiedName browseName) {
-                return optionalIncludes.contains(browseName.name());
-              }
-
-              @Override
-              public void onMethodAdded(@Nullable UaObjectNode parent, UaMethodNode methodNode) {
-                methodNodes.put(methodNode.getBrowseName(), methodNode);
-              }
-            });
-
-    if (!(instance instanceof ConditionTypeNode node)) {
-      // NodeFactory already registered the instance tree; remove it so the failure doesn't leak
-      // orphaned nodes into the address space.
-      instance.delete();
-
-      throw new UaException(
-          StatusCodes.Bad_InternalError,
-          "expected a ConditionTypeNode instance for " + typeDefinitionId + ", got " + instance);
-    }
-
-    node.setBrowseName(browseName);
-    node.setDisplayName(
-        displayName != null ? displayName : LocalizedText.english(browseName.name()));
+    ConditionTypeNode node = context.getServer().getNodeInstantiator().instantiate(request).root();
 
     initializeNode(node, typeDefinitionId);
     wireConditionSource(node);

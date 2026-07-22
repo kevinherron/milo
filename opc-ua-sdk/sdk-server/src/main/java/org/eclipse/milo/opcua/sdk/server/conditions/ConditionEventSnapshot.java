@@ -20,15 +20,13 @@ import org.eclipse.milo.opcua.sdk.server.UaNodeManager;
 import org.eclipse.milo.opcua.sdk.server.model.objects.BaseEventTypeNode;
 import org.eclipse.milo.opcua.sdk.server.model.objects.ConditionTypeNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaNode;
-import org.eclipse.milo.opcua.sdk.server.nodes.UaNodeContext;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaObjectNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
-import org.eclipse.milo.opcua.sdk.server.nodes.factories.NodeFactory;
+import org.eclipse.milo.opcua.sdk.server.nodes.instantiation.InstantiationRequest;
+import org.eclipse.milo.opcua.sdk.server.nodes.instantiation.InstantiationResult;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
-import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
-import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 
 /**
  * An immutable per-branch event snapshot used by ConditionRefresh/ConditionRefresh2 replay.
@@ -45,9 +43,11 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 public final class ConditionEventSnapshot {
 
   private final BaseEventTypeNode eventNode;
+  private final Runnable cleanup;
 
-  ConditionEventSnapshot(BaseEventTypeNode eventNode) {
+  ConditionEventSnapshot(BaseEventTypeNode eventNode, Runnable cleanup) {
     this.eventNode = eventNode;
+    this.cleanup = cleanup;
   }
 
   /**
@@ -62,7 +62,7 @@ public final class ConditionEventSnapshot {
 
   /** Delete the snapshot's event node tree from its private manager. */
   public void delete() {
-    eventNode.delete();
+    cleanup.run();
   }
 
   /**
@@ -85,41 +85,25 @@ public final class ConditionEventSnapshot {
 
     NodeId typeDefinitionId = conditionNode.getTypeDefinitionNode().getNodeId();
 
-    var nodeManager = new UaNodeManager();
+    UaNodeManager nodeManager = new UaNodeManager();
 
-    var nodeContext =
-        new UaNodeContext() {
-          @Override
-          public OpcUaServer getServer() {
-            return server;
-          }
+    // Each snapshot needs an unregistered target of its own: concurrent refreshes may materialize
+    // the same ConditionId, and refresh event fields must resolve without exposing the tree to
+    // server services through the shared EventInstantiator manager.
+    InstantiationRequest<BaseEventTypeNode> request =
+        InstantiationRequest.of(BaseEventTypeNode.class, typeDefinitionId)
+            .nodeId(conditionNode.getNodeId())
+            .target(nodeManager)
+            .includeAllOptionals()
+            // The snapshot is a transient event value, never part of the server's hierarchy, so an
+            // abstract TypeDefinition on the wrapped Condition instance is legitimate here; without
+            // this, refresh replay silently skips such Conditions.
+            .allowAbstractType()
+            .build();
 
-          @Override
-          public NodeManager<UaNode> getNodeManager() {
-            return nodeManager;
-          }
-        };
-
-    UaNode instance =
-        new NodeFactory(nodeContext)
-            .createNode(
-                conditionNode.getNodeId(),
-                typeDefinitionId,
-                new NodeFactory.InstantiationCallback() {
-                  @Override
-                  public boolean includeOptionalNode(
-                      NodeId typeDefinitionId, QualifiedName browseName) {
-                    return true;
-                  }
-                });
-
-    if (!(instance instanceof BaseEventTypeNode snapshotNode)) {
-      instance.delete();
-
-      throw new UaException(
-          StatusCodes.Bad_InternalError,
-          "expected a BaseEventTypeNode instance for " + typeDefinitionId + ", got " + instance);
-    }
+    InstantiationResult<BaseEventTypeNode> result =
+        server.getNodeInstantiator().instantiate(request);
+    BaseEventTypeNode snapshotNode = result.root();
 
     copyVariableValues(server, conditionNode, snapshotNode, new HashSet<>());
 
@@ -127,7 +111,7 @@ public final class ConditionEventSnapshot {
     snapshotNode.setEventId(branch.getLastEventId());
     snapshotNode.setTime(branch.getLastEventTime());
 
-    return new ConditionEventSnapshot(snapshotNode);
+    return new ConditionEventSnapshot(snapshotNode, result::deleteCreated);
   }
 
   /**
